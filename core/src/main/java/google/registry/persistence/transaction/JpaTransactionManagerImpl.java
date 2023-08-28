@@ -18,6 +18,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
+import static google.registry.config.RegistryConfig.getHibernatePerTransactionIsolationEnabled;
 import static google.registry.util.PreconditionsUtils.checkArgumentNotNull;
 import static java.util.AbstractMap.SimpleEntry;
 import static java.util.stream.Collectors.joining;
@@ -31,6 +32,7 @@ import com.google.common.collect.Streams;
 import com.google.common.flogger.FluentLogger;
 import google.registry.model.ImmutableObject;
 import google.registry.persistence.JpaRetries;
+import google.registry.persistence.PersistenceModule.TransactionIsolationLevel;
 import google.registry.persistence.VKey;
 import google.registry.util.Clock;
 import google.registry.util.Retrier;
@@ -65,6 +67,7 @@ import javax.persistence.TemporalType;
 import javax.persistence.TypedQuery;
 import javax.persistence.criteria.CriteriaQuery;
 import javax.persistence.metamodel.EntityType;
+import org.hibernate.cfg.Environment;
 import org.joda.time.DateTime;
 
 /** Implementation of {@link JpaTransactionManager} for JPA compatible database. */
@@ -77,9 +80,6 @@ public class JpaTransactionManagerImpl implements JpaTransactionManager {
   private final EntityManagerFactory emf;
   private final Clock clock;
 
-  // TODO(b/177588434): Investigate alternatives for managing transaction information. ThreadLocal
-  // adds an unnecessary restriction that each request has to be processed by one thread
-  // synchronously.
   private static final ThreadLocal<TransactionInfo> transactionInfo =
       ThreadLocal.withInitial(TransactionInfo::new);
 
@@ -110,22 +110,6 @@ public class JpaTransactionManagerImpl implements JpaTransactionManager {
   }
 
   @Override
-  public JpaTransactionManager setDatabaseSnapshot(String snapshotId) {
-    // Postgresql-specific: 'set transaction' command must be called inside a transaction
-    assertInTransaction();
-
-    EntityManager entityManager = getEntityManager();
-    // Isolation is hardcoded to REPEATABLE READ, as specified by parent's Javadoc.
-    entityManager
-        .createNativeQuery("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-        .executeUpdate();
-    entityManager
-        .createNativeQuery(String.format("SET TRANSACTION SNAPSHOT '%s'", snapshotId))
-        .executeUpdate();
-    return this;
-  }
-
-  @Override
   public <T> TypedQuery<T> query(String sqlString, Class<T> resultClass) {
     return new DetachingTypedQuery<>(getEntityManager().createQuery(sqlString, resultClass));
   }
@@ -153,17 +137,51 @@ public class JpaTransactionManagerImpl implements JpaTransactionManager {
   }
 
   @Override
-  public <T> T transact(Supplier<T> work) {
-    // This prevents inner transaction from retrying, thus avoiding a cascade retry effect.
-    if (inTransaction()) {
-      return transactNoRetry(work);
+  public void assertTransactionIsolationLevel(TransactionIsolationLevel expectedLevel) {
+    assertInTransaction();
+    TransactionIsolationLevel currentLevel = getCurrentTransactionIsolationLevel();
+    if (currentLevel != expectedLevel) {
+      throw new IllegalStateException(
+          String.format(
+              "Current transaction isolation level (%s) is not as expected (%s)",
+              currentLevel, expectedLevel));
     }
-    return retrier.callWithRetry(() -> transactNoRetry(work), JpaRetries::isFailedTxnRetriable);
   }
 
   @Override
-  public <T> T transactNoRetry(Supplier<T> work) {
+  public <T> T transact(Supplier<T> work, TransactionIsolationLevel isolationLevel) {
+    // This prevents inner transaction from retrying, thus avoiding a cascade retry effect.
     if (inTransaction()) {
+      return transactNoRetry(work, isolationLevel);
+    }
+    return retrier.callWithRetry(
+        () -> transactNoRetry(work, isolationLevel), JpaRetries::isFailedTxnRetriable);
+  }
+
+  @Override
+  public <T> T reTransact(Supplier<T> work) {
+    return transact(work);
+  }
+
+  @Override
+  public <T> T transact(Supplier<T> work) {
+    return transact(work, null);
+  }
+
+  @Override
+  public <T> T transactNoRetry(
+      Supplier<T> work, @Nullable TransactionIsolationLevel isolationLevel) {
+    if (inTransaction()) {
+      if (isolationLevel != null && getHibernatePerTransactionIsolationEnabled()) {
+        TransactionIsolationLevel enclosingLevel = getCurrentTransactionIsolationLevel();
+        if (isolationLevel != enclosingLevel) {
+          throw new IllegalStateException(
+              String.format(
+                  "Isolation level conflict detected in nested transactions.\n"
+                      + "Enclosing transaction: %s\nCurrent transaction: %s",
+                  enclosingLevel, isolationLevel));
+        }
+      }
       return work.get();
     }
     TransactionInfo txnInfo = transactionInfo.get();
@@ -172,6 +190,18 @@ public class JpaTransactionManagerImpl implements JpaTransactionManager {
     try {
       txn.begin();
       txnInfo.start(clock);
+      if (isolationLevel != null) {
+        if (getHibernatePerTransactionIsolationEnabled()) {
+          getEntityManager()
+              .createNativeQuery(
+                  String.format("SET TRANSACTION ISOLATION LEVEL %s", isolationLevel.getMode()))
+              .executeUpdate();
+          logger.atInfo().log("Running transaction at %s", isolationLevel);
+        } else {
+          logger.atWarning().log(
+              "Per-transaction isolation level disabled, but %s was requested", isolationLevel);
+        }
+      }
       T result = work.get();
       txn.commit();
       return result;
@@ -190,21 +220,60 @@ public class JpaTransactionManagerImpl implements JpaTransactionManager {
   }
 
   @Override
-  public void transact(Runnable work) {
+  public <T> T transactNoRetry(Supplier<T> work) {
+    return transactNoRetry(work, null);
+  }
+
+  @Override
+  public void transact(Runnable work, TransactionIsolationLevel isolationLevel) {
     transact(
         () -> {
           work.run();
           return null;
-        });
+        },
+        isolationLevel);
   }
 
   @Override
-  public void transactNoRetry(Runnable work) {
+  public void reTransact(Runnable work) {
+    transact(work);
+  }
+
+  @Override
+  public void transact(Runnable work) {
+    transact(work, null);
+  }
+
+  @Override
+  public void transactNoRetry(Runnable work, TransactionIsolationLevel isolationLevel) {
     transactNoRetry(
         () -> {
           work.run();
           return null;
-        });
+        },
+        isolationLevel);
+  }
+
+  @Override
+  public void transactNoRetry(Runnable work) {
+    transactNoRetry(work, null);
+  }
+
+  @Override
+  public TransactionIsolationLevel getDefaultTransactionIsolationLevel() {
+    return TransactionIsolationLevel.valueOf(
+        (String) emf.getProperties().get(Environment.ISOLATION));
+  }
+
+  @Override
+  public TransactionIsolationLevel getCurrentTransactionIsolationLevel() {
+    assertInTransaction();
+    String mode =
+        (String)
+            getEntityManager()
+                .createNativeQuery("SHOW TRANSACTION ISOLATION LEVEL")
+                .getSingleResult();
+    return TransactionIsolationLevel.fromMode(mode);
   }
 
   @Override
@@ -303,7 +372,7 @@ public class JpaTransactionManagerImpl implements JpaTransactionManager {
                 Integer.class)
             .setMaxResults(1);
     entityIds.forEach(entityId -> query.setParameter(entityId.name, entityId.value));
-    return query.getResultList().size() > 0;
+    return !query.getResultList().isEmpty();
   }
 
   @Override
@@ -522,7 +591,7 @@ public class JpaTransactionManagerImpl implements JpaTransactionManager {
         .collect(toImmutableSet());
   }
 
-  private String getAndClause(ImmutableSet<EntityId> entityIds) {
+  private static String getAndClause(ImmutableSet<EntityId> entityIds) {
     return entityIds.stream()
         .map(entityId -> String.format("%s = :%s", entityId.name, entityId.name))
         .collect(joining(" AND "));
@@ -572,7 +641,7 @@ public class JpaTransactionManagerImpl implements JpaTransactionManager {
     try {
       getEntityManager().getMetamodel().entity(object.getClass());
     } catch (IllegalArgumentException e) {
-      // The object is not an entity.  Return without detaching.
+      // The object is not an entity. Return without detaching.
       return object;
     }
 
@@ -653,7 +722,7 @@ public class JpaTransactionManagerImpl implements JpaTransactionManager {
 
     TypedQuery<T> delegate;
 
-    public DetachingTypedQuery(TypedQuery<T> delegate) {
+    DetachingTypedQuery(TypedQuery<T> delegate) {
       this.delegate = delegate;
     }
 
@@ -882,7 +951,7 @@ public class JpaTransactionManagerImpl implements JpaTransactionManager {
     @Override
     public Optional<T> first() {
       List<T> results = buildQuery().setMaxResults(1).getResultList();
-      return results.size() > 0 ? Optional.of(detach(results.get(0))) : Optional.empty();
+      return !results.isEmpty() ? Optional.of(detach(results.get(0))) : Optional.empty();
     }
 
     @Override
@@ -911,7 +980,7 @@ public class JpaTransactionManagerImpl implements JpaTransactionManager {
     public ImmutableList<T> list() {
       return buildQuery().getResultList().stream()
           .map(JpaTransactionManagerImpl.this::detach)
-          .collect(ImmutableList.toImmutableList());
+          .collect(toImmutableList());
     }
   }
 }

@@ -18,6 +18,7 @@ import com.google.common.collect.ImmutableCollection;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import google.registry.model.ImmutableObject;
+import google.registry.persistence.PersistenceModule.TransactionIsolationLevel;
 import google.registry.persistence.VKey;
 import java.util.Optional;
 import java.util.function.Supplier;
@@ -50,6 +51,21 @@ public class ReplicaSimulatingJpaTransactionManager implements JpaTransactionMan
   }
 
   @Override
+  public TransactionIsolationLevel getDefaultTransactionIsolationLevel() {
+    return delegate.getDefaultTransactionIsolationLevel();
+  }
+
+  @Override
+  public TransactionIsolationLevel getCurrentTransactionIsolationLevel() {
+    return delegate.getCurrentTransactionIsolationLevel();
+  }
+
+  @Override
+  public void assertTransactionIsolationLevel(TransactionIsolationLevel expectedLevel) {
+    delegate.assertTransactionIsolationLevel(expectedLevel);
+  }
+
+  @Override
   public EntityManager getStandaloneEntityManager() {
     return delegate.getStandaloneEntityManager();
   }
@@ -57,11 +73,6 @@ public class ReplicaSimulatingJpaTransactionManager implements JpaTransactionMan
   @Override
   public EntityManager getEntityManager() {
     return delegate.getEntityManager();
-  }
-
-  @Override
-  public JpaTransactionManager setDatabaseSnapshot(String snapshotId) {
-    return delegate.setDatabaseSnapshot(snapshotId);
   }
 
   @Override
@@ -90,7 +101,7 @@ public class ReplicaSimulatingJpaTransactionManager implements JpaTransactionMan
   }
 
   @Override
-  public <T> T transact(Supplier<T> work) {
+  public <T> T transact(Supplier<T> work, TransactionIsolationLevel isolationLevel) {
     if (delegate.inTransaction()) {
       return work.get();
     }
@@ -101,26 +112,58 @@ public class ReplicaSimulatingJpaTransactionManager implements JpaTransactionMan
               .createNativeQuery("SET TRANSACTION READ ONLY")
               .executeUpdate();
           return work.get();
-        });
+        },
+        isolationLevel);
   }
 
   @Override
-  public <T> T transactNoRetry(Supplier<T> work) {
+  public <T> T reTransact(Supplier<T> work) {
     return transact(work);
   }
 
   @Override
-  public void transact(Runnable work) {
+  public <T> T transact(Supplier<T> work) {
+    return transact(work, null);
+  }
+
+  @Override
+  public <T> T transactNoRetry(Supplier<T> work, TransactionIsolationLevel isolationLevel) {
+    return transact(work, isolationLevel);
+  }
+
+  @Override
+  public <T> T transactNoRetry(Supplier<T> work) {
+    return transactNoRetry(work, null);
+  }
+
+  @Override
+  public void transact(Runnable work, TransactionIsolationLevel isolationLevel) {
     transact(
         () -> {
           work.run();
           return null;
-        });
+        },
+        isolationLevel);
+  }
+
+  @Override
+  public void reTransact(Runnable work) {
+    transact(work);
+  }
+
+  @Override
+  public void transact(Runnable work) {
+    transact(work, null);
+  }
+
+  @Override
+  public void transactNoRetry(Runnable work, TransactionIsolationLevel isolationLevel) {
+    transact(work, isolationLevel);
   }
 
   @Override
   public void transactNoRetry(Runnable work) {
-    transact(work);
+    transactNoRetry(work, null);
   }
 
   @Override

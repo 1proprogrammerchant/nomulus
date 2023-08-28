@@ -20,11 +20,13 @@ import static google.registry.util.CollectionUtils.nullToEmptyImmutableCopy;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
+import com.google.gson.annotations.Expose;
 import google.registry.model.Buildable;
 import google.registry.model.ImmutableObject;
 import google.registry.model.JsonMapBuilder;
 import google.registry.model.Jsonifiable;
 import google.registry.model.UnsafeSerializable;
+import google.registry.tools.GsonUtils.GsonPostProcessable;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -54,7 +56,8 @@ import javax.xml.bind.annotation.adapters.XmlJavaTypeAdapter;
 @XmlTransient
 @Embeddable
 @MappedSuperclass
-public class Address extends ImmutableObject implements Jsonifiable, UnsafeSerializable {
+public class Address extends ImmutableObject
+    implements Jsonifiable, UnsafeSerializable, GsonPostProcessable {
 
   /**
    * At most three lines of addresses parsed from XML elements.
@@ -87,6 +90,7 @@ public class Address extends ImmutableObject implements Jsonifiable, UnsafeSeria
    */
   @XmlJavaTypeAdapter(NormalizedStringAdapter.class)
   @Transient
+  @Expose
   protected List<String> street;
 
   @XmlTransient @IgnoredInDiffableMap protected String streetLine1;
@@ -96,18 +100,22 @@ public class Address extends ImmutableObject implements Jsonifiable, UnsafeSeria
   @XmlTransient @IgnoredInDiffableMap protected String streetLine3;
 
   @XmlJavaTypeAdapter(NormalizedStringAdapter.class)
+  @Expose
   protected String city;
 
   @XmlElement(name = "sp")
   @XmlJavaTypeAdapter(NormalizedStringAdapter.class)
+  @Expose
   protected String state;
 
   @XmlElement(name = "pc")
   @XmlJavaTypeAdapter(CollapsedStringAdapter.class)
+  @Expose
   protected String zip;
 
   @XmlElement(name = "cc")
   @XmlJavaTypeAdapter(CollapsedStringAdapter.class)
+  @Expose
   protected String countryCode;
 
   public ImmutableList<String> getStreet() {
@@ -144,6 +152,16 @@ public class Address extends ImmutableObject implements Jsonifiable, UnsafeSeria
   @VisibleForTesting
   public Builder<? extends Address> asBuilder() {
     return new Builder<>(clone(this));
+  }
+
+  @Override
+  public void postProcess() {
+    if (street == null || street.isEmpty()) {
+      return;
+    }
+    streetLine1 = street.get(0);
+    streetLine2 = street.size() >= 2 ? street.get(1) : null;
+    streetLine3 = street.size() >= 3 ? street.get(2) : null;
   }
 
   /** A builder for constructing {@link Address}. */
@@ -222,11 +240,6 @@ public class Address extends ImmutableObject implements Jsonifiable, UnsafeSeria
    */
   @SuppressWarnings("unused")
   void afterUnmarshal(Unmarshaller unmarshaller, Object parent) {
-    if (street == null || street.isEmpty()) {
-      return;
-    }
-    streetLine1 = street.get(0);
-    streetLine2 = street.size() >= 2 ? street.get(1) : null;
-    streetLine3 = street.size() >= 3 ? street.get(2) : null;
+    postProcess();
   }
 }

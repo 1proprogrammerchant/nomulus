@@ -12,17 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package google.registry.util;
+package google.registry.model;
 
-import java.io.IOException;
-import org.joda.time.DateTime;
-import org.joda.time.format.ISODateTimeFormat;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import dagger.Module;
+import dagger.Provides;
 
-/** GSON type adapter for Joda {@link DateTime} objects. */
-public class DateTimeTypeAdapter extends StringBaseTypeAdapter<DateTime> {
+/** Dagger module for the entity (model) classes. */
+@Module
+public final class ModelModule {
 
-  @Override
-  protected DateTime fromString(String stringValue) throws IOException {
-    return ISODateTimeFormat.dateTime().withZoneUTC().parseDateTime(stringValue);
+  /** Returns an {@link ObjectMapper} object that can be used to convert an entity to/from YAML. */
+  @Provides
+  public static ObjectMapper provideObjectMapper() {
+    return EntityYamlUtils.createObjectMapper();
   }
 }

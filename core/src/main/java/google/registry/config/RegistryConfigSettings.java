@@ -42,7 +42,7 @@ public class RegistryConfigSettings {
   public SslCertificateValidation sslCertificateValidation;
   public ContactHistory contactHistory;
   public DnsUpdate dnsUpdate;
-  public PackageMonitoring packageMonitoring;
+  public BulkPricingPackageMonitoring bulkPricingPackageMonitoring;
 
   /** Configuration options that apply to the entire GCP project. */
   public static class GcpProject {
@@ -115,6 +115,7 @@ public class RegistryConfigSettings {
 
   /** Configuration for Hibernate. */
   public static class Hibernate {
+    public boolean perTransactionIsolation;
     public String connectionIsolation;
     public String logSqlQueries;
     public String hikariConnectionTimeout;
@@ -252,13 +253,13 @@ public class RegistryConfigSettings {
     public String registryCcEmail;
   }
 
-  /** Configuration for package compliance monitoring. */
-  public static class PackageMonitoring {
-    public String packageCreateLimitEmailSubject;
-    public String packageCreateLimitEmailBody;
-    public String packageDomainLimitWarningEmailSubject;
-    public String packageDomainLimitWarningEmailBody;
-    public String packageDomainLimitUpgradeEmailSubject;
-    public String packageDomainLimitUpgradeEmailBody;
+  /** Configuration for bulk pricing package compliance monitoring. */
+  public static class BulkPricingPackageMonitoring {
+    public String bulkPricingPackageCreateLimitEmailSubject;
+    public String bulkPricingPackageCreateLimitEmailBody;
+    public String bulkPricingPackageDomainLimitWarningEmailSubject;
+    public String bulkPricingPackageDomainLimitWarningEmailBody;
+    public String bulkPricingPackageDomainLimitUpgradeEmailSubject;
+    public String bulkPricingPackageDomainLimitUpgradeEmailBody;
   }
 }

@@ -19,7 +19,6 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Strings.emptyToNull;
 import static com.google.common.base.Strings.nullToEmpty;
-import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.ImmutableSortedSet.toImmutableSortedSet;
 import static com.google.common.collect.Sets.immutableEnumSet;
@@ -49,7 +48,6 @@ import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Range;
 import com.google.common.collect.Sets;
-import com.google.common.collect.Streams;
 import com.google.gson.annotations.Expose;
 import com.google.re2j.Pattern;
 import google.registry.model.Buildable;
@@ -211,6 +209,7 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
    */
   @Id
   @Column(nullable = false)
+  @Expose
   String registrarId;
 
   /**
@@ -224,6 +223,7 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
    * @see <a href="http://www.icann.org/registrar-reports/accredited-list.html">ICANN-Accredited
    *     Registrars</a>
    */
+  @Expose
   @Column(nullable = false)
   String registrarName;
 
@@ -237,10 +237,10 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
   State state;
 
   /** The set of TLDs which this registrar is allowed to access. */
-  Set<String> allowedTlds;
+  @Expose Set<String> allowedTlds;
 
   /** Host name of WHOIS server. */
-  String whoisServer;
+  @Expose String whoisServer;
 
   /** Base URLs for the registrar's RDAP servers. */
   Set<String> rdapBaseUrls;
@@ -287,6 +287,7 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
    * unrestricted UTF-8.
    */
   @Embedded
+  @Expose
   @AttributeOverrides({
     @AttributeOverride(
         name = "streetLine1",
@@ -323,13 +324,13 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
   RegistrarAddress internationalizedAddress;
 
   /** Voice number. */
-  String phoneNumber;
+  @Expose String phoneNumber;
 
   /** Fax number. */
-  String faxNumber;
+  @Expose String faxNumber;
 
   /** Email address. */
-  String emailAddress;
+  @Expose String emailAddress;
 
   // External IDs.
 
@@ -345,7 +346,7 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
    * @see <a href="http://www.iana.org/assignments/registrar-ids/registrar-ids.txt">Registrar
    *     IDs</a>
    */
-  @Nullable Long ianaIdentifier;
+  @Expose @Nullable Long ianaIdentifier;
 
   /** Purchase Order number used for invoices in external billing system, if applicable. */
   @Nullable String poNumber;
@@ -358,10 +359,10 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
    * accessed by {@link #getBillingAccountMap}, a sorted map is returned to guarantee deterministic
    * behavior when serializing the map, for display purpose for instance.
    */
-  @Nullable Map<CurrencyUnit, String> billingAccountMap;
+  @Expose @Nullable Map<CurrencyUnit, String> billingAccountMap;
 
   /** URL of registrar's website. */
-  String url;
+  @Expose String url;
 
   /**
    * ICANN referral email address.
@@ -369,10 +370,10 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
    * <p>This value is specified in the initial registrar contact. It can't be edited in the web GUI,
    * and it must be specified when the registrar account is created.
    */
-  String icannReferralEmail;
+  @Expose String icannReferralEmail;
 
   /** Id of the folder in drive used to publish information for this registrar. */
-  String driveFolderId;
+  @Expose String driveFolderId;
 
   // Metadata.
 
@@ -400,7 +401,7 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
   boolean contactsRequireSyncing = true;
 
   /** Whether or not registry lock is allowed for this registrar. */
-  boolean registryLockAllowed = false;
+  @Expose boolean registryLockAllowed = false;
 
   public String getRegistrarId() {
     return registrarId;
@@ -553,7 +554,7 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
    * address.
    */
   public ImmutableSortedSet<RegistrarPoc> getContacts() {
-    return Streams.stream(getContactsIterable())
+    return getContactPocs().stream()
         .filter(Objects::nonNull)
         .collect(toImmutableSortedSet(CONTACT_EMAIL_COMPARATOR));
   }
@@ -563,7 +564,7 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
    * their email address.
    */
   public ImmutableSortedSet<RegistrarPoc> getContactsOfType(final RegistrarPoc.Type type) {
-    return Streams.stream(getContactsIterable())
+    return getContactPocs().stream()
         .filter(Objects::nonNull)
         .filter((@Nullable RegistrarPoc contact) -> contact.getTypes().contains(type))
         .collect(toImmutableSortedSet(CONTACT_EMAIL_COMPARATOR));
@@ -577,13 +578,13 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
     return getContacts().stream().filter(RegistrarPoc::getVisibleInDomainWhoisAsAbuse).findFirst();
   }
 
-  private Iterable<RegistrarPoc> getContactsIterable() {
+  private ImmutableSet<RegistrarPoc> getContactPocs() {
     return tm().transact(
             () ->
                 tm().query("FROM RegistrarPoc WHERE registrarId = :registrarId", RegistrarPoc.class)
                     .setParameter("registrarId", registrarId)
                     .getResultStream()
-                    .collect(toImmutableList()));
+                    .collect(toImmutableSet()));
   }
 
   @Override
@@ -729,8 +730,7 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
               .map(Tld::createVKey)
               .collect(toImmutableSet());
       Set<VKey<Tld>> missingTldKeys =
-          Sets.difference(
-              newTldKeys, tm().transact(() -> tm().loadByKeysIfPresent(newTldKeys)).keySet());
+          Sets.difference(newTldKeys, tm().loadByKeysIfPresent(newTldKeys).keySet());
       checkArgument(missingTldKeys.isEmpty(), "Trying to set nonexistent TLDs: %s", missingTldKeys);
       getInstance().allowedTlds = ImmutableSortedSet.copyOf(allowedTlds);
       return this;

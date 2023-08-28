@@ -17,6 +17,7 @@ package google.registry.model.tld;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 import static com.google.common.truth.Truth8.assertThat;
+import static google.registry.model.EntityYamlUtils.createObjectMapper;
 import static google.registry.model.ImmutableObjectSubject.assertAboutImmutableObjects;
 import static google.registry.model.domain.token.AllocationToken.TokenType.DEFAULT_PROMO;
 import static google.registry.model.domain.token.AllocationToken.TokenType.SINGLE_USE;
@@ -24,17 +25,16 @@ import static google.registry.model.tld.Tld.TldState.GENERAL_AVAILABILITY;
 import static google.registry.model.tld.Tld.TldState.PREDELEGATION;
 import static google.registry.model.tld.Tld.TldState.QUIET_PERIOD;
 import static google.registry.model.tld.Tld.TldState.START_DATE_SUNRISE;
-import static google.registry.model.tld.TldYamlUtils.getObjectMapper;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
 import static google.registry.testing.DatabaseHelper.createTld;
 import static google.registry.testing.DatabaseHelper.newTld;
 import static google.registry.testing.DatabaseHelper.persistPremiumList;
 import static google.registry.testing.DatabaseHelper.persistReservedList;
 import static google.registry.testing.DatabaseHelper.persistResource;
-import static google.registry.testing.TestDataHelper.filePath;
 import static google.registry.testing.TestDataHelper.loadFile;
 import static google.registry.util.DateTimeUtils.END_OF_TIME;
 import static google.registry.util.DateTimeUtils.START_OF_TIME;
+import static google.registry.util.ResourceUtils.readResourceBytes;
 import static java.math.RoundingMode.UNNECESSARY;
 import static org.joda.money.CurrencyUnit.EUR;
 import static org.joda.money.CurrencyUnit.USD;
@@ -55,7 +55,6 @@ import google.registry.model.tld.label.ReservedList;
 import google.registry.persistence.VKey;
 import google.registry.tldconfig.idn.IdnTableEnum;
 import google.registry.util.SerializeUtils;
-import java.io.File;
 import java.math.BigDecimal;
 import java.util.Optional;
 import org.joda.money.Money;
@@ -130,7 +129,7 @@ public final class TldTest extends EntityTestCase {
             .setIdnTables(ImmutableSet.of(IdnTableEnum.JA, IdnTableEnum.EXTENDED_LATIN))
             .build();
 
-    ObjectMapper mapper = getObjectMapper();
+    ObjectMapper mapper = createObjectMapper();
     String yaml = mapper.writeValueAsString(existingTld);
     assertThat(yaml).isEqualTo(loadFile(getClass(), "tld.yaml"));
   }
@@ -163,15 +162,16 @@ public final class TldTest extends EntityTestCase {
             .setIdnTables(ImmutableSet.of(IdnTableEnum.JA, IdnTableEnum.EXTENDED_LATIN))
             .build();
 
-    ObjectMapper mapper = getObjectMapper();
-    Tld constructedTld = mapper.readValue(new File(filePath(getClass(), "tld.yaml")), Tld.class);
+    ObjectMapper mapper = createObjectMapper();
+    Tld constructedTld =
+        mapper.readValue(readResourceBytes(getClass(), "tld.yaml").openBufferedStream(), Tld.class);
     compareTlds(existingTld, constructedTld);
   }
 
   @Test
   void testSuccess_tldYamlRoundtrip() throws Exception {
     Tld testTld = createTld("test");
-    ObjectMapper mapper = getObjectMapper();
+    ObjectMapper mapper = createObjectMapper();
     String yaml = mapper.writeValueAsString(testTld);
     Tld constructedTld = mapper.readValue(yaml, Tld.class);
     compareTlds(testTld, constructedTld);

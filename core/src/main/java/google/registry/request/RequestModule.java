@@ -31,7 +31,7 @@ import com.google.common.io.ByteStreams;
 import com.google.common.io.CharStreams;
 import com.google.common.net.MediaType;
 import com.google.gson.Gson;
-import com.google.gson.JsonObject;
+import com.google.gson.JsonElement;
 import com.google.protobuf.ByteString;
 import dagger.Module;
 import dagger.Provides;
@@ -40,6 +40,7 @@ import google.registry.request.HttpException.UnsupportedMediaTypeException;
 import google.registry.request.auth.AuthResult;
 import google.registry.request.lock.LockHandler;
 import google.registry.request.lock.LockHandlerImpl;
+import google.registry.tools.GsonUtils;
 import java.io.IOException;
 import java.util.Map;
 import java.util.Optional;
@@ -67,6 +68,13 @@ public final class RequestModule {
     this.req = req;
     this.rsp = rsp;
     this.authResult = authResult;
+  }
+
+  @RequestScope
+  @VisibleForTesting
+  @Provides
+  public static Gson provideGson() {
+    return GsonUtils.provideGson();
   }
 
   @Provides
@@ -244,11 +252,11 @@ public final class RequestModule {
 
   @Provides
   @OptionalJsonPayload
-  public static Optional<JsonObject> provideJsonBody(HttpServletRequest req, Gson gson) {
+  public static Optional<JsonElement> provideJsonBody(HttpServletRequest req, Gson gson) {
     try {
-      JsonObject body = gson.fromJson(req.getReader(), JsonObject.class);
-      return Optional.of(body);
-    } catch (Exception e) {
+      // GET requests return a null reader and thus a null JsonObject, which is fine
+      return Optional.ofNullable(gson.fromJson(req.getReader(), JsonElement.class));
+    } catch (IOException e) {
       return Optional.empty();
     }
   }

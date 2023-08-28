@@ -12,17 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package google.registry.util;
+package google.registry.persistence;
 
-import java.io.IOException;
-import org.joda.time.DateTime;
-import org.joda.time.format.ISODateTimeFormat;
+import google.registry.persistence.PersistenceModule.TransactionIsolationLevel;
+import java.lang.annotation.Documented;
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
 
-/** GSON type adapter for Joda {@link DateTime} objects. */
-public class DateTimeTypeAdapter extends StringBaseTypeAdapter<DateTime> {
-
-  @Override
-  protected DateTime fromString(String stringValue) throws IOException {
-    return ISODateTimeFormat.dateTime().withZoneUTC().parseDateTime(stringValue);
-  }
+/**
+ * Indicates which {@link TransactionIsolationLevel} that a {@link
+ * google.registry.flows.TransactionalFlow} show run at.
+ */
+@Documented
+@Retention(RetentionPolicy.RUNTIME)
+@Target(ElementType.TYPE)
+public @interface IsolationLevel {
+  TransactionIsolationLevel value();
 }

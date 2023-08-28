@@ -18,6 +18,7 @@ import com.google.common.collect.ImmutableCollection;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import google.registry.model.ImmutableObject;
+import google.registry.persistence.PersistenceModule.TransactionIsolationLevel;
 import google.registry.persistence.VKey;
 import java.util.NoSuchElementException;
 import java.util.Optional;
@@ -49,8 +50,49 @@ public interface TransactionManager {
   /** Executes the work in a transaction and returns the result. */
   <T> T transact(Supplier<T> work);
 
+  /**
+   * Executes the work in a transaction at the given {@link TransactionIsolationLevel} and returns
+   * the result.
+   */
+  <T> T transact(Supplier<T> work, TransactionIsolationLevel isolationLevel);
+
+  /**
+   * Executes the work in a (potentially wrapped) transaction and returns the result.
+   *
+   * <p>Calls to this method are typically going to be in inner functions, that are called either as
+   * top-level transactions themselves or are nested inside of larger transactions (e.g. a
+   * transactional flow). Invocations of reTransact must be vetted to occur in both situations and
+   * with such complexity that it is not trivial to refactor out the nested transaction calls. New
+   * code should be written in such a way as to avoid requiring reTransact in the first place.
+   *
+   * <p>In the future we will be enforcing that {@link #transact(Supplier)} calls be top-level only,
+   * with reTransact calls being the only ones that can potentially be an inner nested transaction
+   * (which is a noop). Note that, as this can be a nested inner exception, there is no overload
+   * provided to specify a (potentially conflicting) transaction isolation level.
+   */
+  <T> T reTransact(Supplier<T> work);
+
   /** Executes the work in a transaction. */
   void transact(Runnable work);
+
+  /** Executes the work in a transaction at the given {@link TransactionIsolationLevel}. */
+  void transact(Runnable work, TransactionIsolationLevel isolationLevel);
+
+  /**
+   * Executes the work in a (potentially wrapped) transaction and returns the result.
+   *
+   * <p>Calls to this method are typically going to be in inner functions, that are called either as
+   * top-level transactions themselves or are nested inside of larger transactions (e.g. a
+   * transactional flow). Invocations of reTransact must be vetted to occur in both situations and
+   * with such complexity that it is not trivial to refactor out the nested transaction calls. New
+   * code should be written in such a way as to avoid requiring reTransact in the first place.
+   *
+   * <p>In the future we will be enforcing that {@link #transact(Runnable)} calls be top-level only,
+   * with reTransact calls being the only ones that can potentially be an inner nested transaction
+   * (which is a noop). Note that, as this can be a nested inner exception, there is no overload *
+   * provided to specify a (potentially conflicting) transaction isolation level.
+   */
+  void reTransact(Runnable work);
 
   /** Returns the time associated with the start of this particular transaction attempt. */
   DateTime getTransactionTime();

@@ -12,17 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package google.registry.util;
+package google.registry.model.adapters;
 
+import google.registry.model.adapters.CurrencyUnitAdapter.UnknownCurrencyException;
+import google.registry.util.StringBaseTypeAdapter;
 import java.io.IOException;
-import org.joda.time.DateTime;
-import org.joda.time.format.ISODateTimeFormat;
+import org.joda.money.CurrencyUnit;
 
-/** GSON type adapter for Joda {@link DateTime} objects. */
-public class DateTimeTypeAdapter extends StringBaseTypeAdapter<DateTime> {
+public class CurrencyJsonAdapter extends StringBaseTypeAdapter<CurrencyUnit> {
 
   @Override
-  protected DateTime fromString(String stringValue) throws IOException {
-    return ISODateTimeFormat.dateTime().withZoneUTC().parseDateTime(stringValue);
+  protected CurrencyUnit fromString(String stringValue) throws IOException {
+    try {
+      return CurrencyUnitAdapter.convertFromString(stringValue);
+    } catch (UnknownCurrencyException e) {
+      throw new IOException("Unknown currency");
+    }
   }
 }

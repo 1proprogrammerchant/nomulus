@@ -14,15 +14,18 @@
 
 package google.registry.tools;
 
-import static google.registry.model.tld.TldYamlUtils.getObjectMapper;
 import static google.registry.model.tld.Tlds.assertTldsExist;
+import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.beust.jcommander.Parameter;
 import com.beust.jcommander.Parameters;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import google.registry.model.tld.Tld;
+import java.io.PrintStream;
+import java.io.UnsupportedEncodingException;
 import java.util.List;
+import javax.inject.Inject;
 
 /** Command to show a TLD record. */
 @Parameters(separators = " =", commandDescription = "Show TLD record(s)")
@@ -33,11 +36,14 @@ final class GetTldCommand implements Command {
       required = true)
   private List<String> mainParameters;
 
+  @Inject ObjectMapper objectMapper;
+
   @Override
-  public void run() throws JsonProcessingException {
-    ObjectMapper mapper = getObjectMapper();
-    for (String tld : assertTldsExist(mainParameters)) {
-      System.out.println(mapper.writeValueAsString(Tld.get(tld)));
+  public void run() throws JsonProcessingException, UnsupportedEncodingException {
+    try (PrintStream printStream = new PrintStream(System.out, false, UTF_8.name())) {
+      for (String tld : assertTldsExist(mainParameters)) {
+        printStream.println(objectMapper.writeValueAsString(Tld.get(tld)));
+      }
     }
   }
 }
