@@ -14,7 +14,8 @@
 
 package google.registry.flows;
 
-import static google.registry.model.EppResourceUtils.loadByForeignKey;
+import static com.google.common.truth.Truth.assertThat;
+import static google.registry.model.ForeignKeyUtils.loadResource;
 import static google.registry.model.eppoutput.Result.Code.SUCCESS;
 import static google.registry.model.eppoutput.Result.Code.SUCCESS_AND_CLOSE;
 import static google.registry.model.eppoutput.Result.Code.SUCCESS_WITH_ACTION_PENDING;
@@ -35,7 +36,6 @@ import static org.joda.money.CurrencyUnit.USD;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.Ordering;
-import com.google.common.truth.Truth;
 import com.google.re2j.Matcher;
 import com.google.re2j.Pattern;
 import google.registry.model.billing.BillingBase.Reason;
@@ -79,7 +79,6 @@ class EppLifecycleDomainTest extends EppTestCase {
   @Test
   void testDomainDeleteRestore() throws Exception {
     assertThatLoginSucceeds("NewRegistrar", "foo-BAR2");
-    createContacts(DateTime.parse("2000-06-01T00:00:00Z"));
 
     // Create domain example.tld
     assertThatCommand(
@@ -139,7 +138,6 @@ class EppLifecycleDomainTest extends EppTestCase {
   @Test
   void testDomainDeleteRestore_duringAutorenewGracePeriod() throws Exception {
     assertThatLoginSucceeds("NewRegistrar", "foo-BAR2");
-    createContacts(DateTime.parse("2000-06-01T00:00:00Z"));
 
     // Create domain example.tld
     assertThatCommand(
@@ -213,7 +211,6 @@ class EppLifecycleDomainTest extends EppTestCase {
   @Test
   void testDomainDeleteRestore_duringRenewalGracePeriod() throws Exception {
     assertThatLoginSucceeds("NewRegistrar", "foo-BAR2");
-    createContacts(DateTime.parse("2000-06-01T00:00:00Z"));
 
     // Create domain example.tld
     assertThatCommand(
@@ -295,7 +292,6 @@ class EppLifecycleDomainTest extends EppTestCase {
   @Test
   void testDomainDelete_duringAddAndRenewalGracePeriod_deletesImmediately() throws Exception {
     assertThatLoginSucceeds("NewRegistrar", "foo-BAR2");
-    createContacts(DateTime.parse("2000-06-01T00:00:00Z"));
 
     DateTime createTime = DateTime.parse("2000-06-01T00:02:00Z");
     // Create domain example.tld
@@ -340,7 +336,7 @@ class EppLifecycleDomainTest extends EppTestCase {
                 "UPDATE", "2000-06-03T00:00:00Z"));
 
     Domain domain =
-        loadByForeignKey(Domain.class, "example.tld", DateTime.parse("2000-06-03T04:00:00Z")).get();
+        loadResource(Domain.class, "example.tld", DateTime.parse("2000-06-03T04:00:00Z")).get();
 
     DateTime deleteTime = DateTime.parse("2000-06-04T00:00:00Z");
     // Delete domain example.tld during both grace periods.
@@ -387,7 +383,6 @@ class EppLifecycleDomainTest extends EppTestCase {
   @Test
   void testDomainDeletion_withinAddGracePeriod_deletesImmediately() throws Exception {
     assertThatLoginSucceeds("NewRegistrar", "foo-BAR2");
-    createContacts(DateTime.parse("2000-06-01T00:00:00Z"));
 
     // Create domain example.tld
     DateTime createTime = DateTime.parse("2000-06-01T00:02:00Z");
@@ -401,7 +396,7 @@ class EppLifecycleDomainTest extends EppTestCase {
                 "CRDATE", "2000-06-01T00:02:00.0Z",
                 "EXDATE", "2002-06-01T00:02:00.0Z"));
 
-    Domain domain = loadByForeignKey(Domain.class, "example.tld", createTime.plusHours(1)).get();
+    Domain domain = loadResource(Domain.class, "example.tld", createTime.plusHours(1)).get();
 
     // Delete domain example.tld within the add grace period.
     DateTime deleteTime = createTime.plusDays(1);
@@ -441,7 +436,6 @@ class EppLifecycleDomainTest extends EppTestCase {
   @Test
   void testDomainDeletion_outsideAddGracePeriod_showsRedemptionPeriod() throws Exception {
     assertThatLoginSucceeds("NewRegistrar", "foo-BAR2");
-    createContacts(DateTime.parse("2000-06-01T00:00:00Z"));
 
     DateTime createTime = DateTime.parse("2000-06-01T00:02:00Z");
     // Create domain example.tld
@@ -483,7 +477,7 @@ class EppLifecycleDomainTest extends EppTestCase {
                 "CODE", "2303", "MSG", "The domain with given ID (example.tld) doesn't exist."));
 
     Domain domain =
-        loadByForeignKey(Domain.class, "example.tld", DateTime.parse("2000-08-01T00:02:00Z")).get();
+        loadResource(Domain.class, "example.tld", DateTime.parse("2000-08-01T00:02:00Z")).get();
     // Verify that the autorenew was ended and that the one-time billing event is not canceled.
     assertBillingEventsForResource(
         domain,
@@ -494,14 +488,12 @@ class EppLifecycleDomainTest extends EppTestCase {
 
     // Make sure that in the future, the domain expiration is unchanged after deletion
     Domain clonedDomain = domain.cloneProjectedAtTime(deleteTime.plusYears(5));
-    Truth.assertThat(clonedDomain.getRegistrationExpirationTime())
-        .isEqualTo(createTime.plusYears(2));
+    assertThat(clonedDomain.getRegistrationExpirationDateTime()).isEqualTo(createTime.plusYears(2));
   }
 
   @Test
   void testEapDomainDeletion_withinAddGracePeriod_eapFeeIsNotRefunded() throws Exception {
     assertThatCommand("login_valid_fee_extension.xml").hasSuccessfulLogin();
-    createContacts(DateTime.parse("2000-06-01T00:00:00Z"));
 
     // Set the EAP schedule.
     persistResource(
@@ -524,7 +516,7 @@ class EppLifecycleDomainTest extends EppTestCase {
         .hasResponse("domain_create_response_eap_fee.xml");
 
     Domain domain =
-        loadByForeignKey(Domain.class, "example.tld", DateTime.parse("2000-06-01T00:03:00Z")).get();
+        loadResource(Domain.class, "example.tld", DateTime.parse("2000-06-01T00:03:00Z")).get();
 
     // Delete domain example.tld within the add grade period.
     DateTime deleteTime = createTime.plusDays(1);
@@ -689,7 +681,7 @@ class EppLifecycleDomainTest extends EppTestCase {
 
     assertThatLoginSucceeds("NewRegistrar", "foo-BAR2");
 
-    createContactsAndHosts();
+    createHosts();
 
     assertThatCommand("domain_create_sunrise_encoded_mark.xml")
         .atTime(sunriseDate.minusDays(1))
@@ -752,11 +744,11 @@ class EppLifecycleDomainTest extends EppTestCase {
         .hasResponse(
             "poll_response_autorenew.xml",
             ImmutableMap.of(
-                "ID", "15-2002",
+                "ID", "11-2002",
                 "QDATE", "2002-06-01T00:04:00Z",
                 "DOMAIN", "fakesite.example",
                 "EXDATE", "2003-06-01T00:04:00Z"));
-    assertThatCommand("poll_ack.xml", ImmutableMap.of("ID", "15-2002"))
+    assertThatCommand("poll_ack.xml", ImmutableMap.of("ID", "11-2002"))
         .atTime("2002-07-01T00:02:00Z")
         .hasResponse("poll_ack_response_empty.xml");
 
@@ -770,13 +762,13 @@ class EppLifecycleDomainTest extends EppTestCase {
         .hasResponse(
             "poll_response_autorenew.xml",
             ImmutableMap.of(
-                "ID", "15-2003", // Note -- Year is different from previous ID.
+                "ID", "11-2003", // Note -- Year is different from previous ID.
                 "QDATE", "2003-06-01T00:04:00Z",
                 "DOMAIN", "fakesite.example",
                 "EXDATE", "2004-06-01T00:04:00Z"));
 
     // Ack the second poll message and verify that none remain.
-    assertThatCommand("poll_ack.xml", ImmutableMap.of("ID", "15-2003"))
+    assertThatCommand("poll_ack.xml", ImmutableMap.of("ID", "11-2003"))
         .atTime("2003-07-01T00:05:05Z")
         .hasResponse("poll_ack_response_empty.xml");
     assertThatCommand("poll.xml")
@@ -806,7 +798,7 @@ class EppLifecycleDomainTest extends EppTestCase {
 
     // As the losing registrar, read the request poll message, and then ack it.
     assertThatLoginSucceeds("NewRegistrar", "foo-BAR2");
-    String messageId = "24-2001";
+    String messageId = "20-2001";
     assertThatCommand("poll.xml")
         .atTime("2001-01-01T00:01:00Z")
         .hasResponse("poll_response_domain_transfer_request.xml", ImmutableMap.of("ID", messageId));
@@ -815,7 +807,7 @@ class EppLifecycleDomainTest extends EppTestCase {
         .hasResponse("poll_ack_response_empty.xml");
 
     // Five days in the future, expect a server approval poll message to the loser, and ack it.
-    messageId = "23-2001";
+    messageId = "19-2001";
     assertThatCommand("poll.xml")
         .atTime("2001-01-06T00:01:00Z")
         .hasResponse(
@@ -827,7 +819,7 @@ class EppLifecycleDomainTest extends EppTestCase {
     assertThatLogoutSucceeds();
 
     // Also expect a server approval poll message to the winner, with the transfer request trid.
-    messageId = "22-2001";
+    messageId = "18-2001";
     assertThatLoginSucceeds("TheRegistrar", "password2");
     assertThatCommand("poll.xml")
         .atTime("2001-01-06T00:02:00Z")
@@ -1105,7 +1097,6 @@ class EppLifecycleDomainTest extends EppTestCase {
     createTlds("bar.foo.tld", "foo.tld");
 
     assertThatLoginSucceeds("NewRegistrar", "foo-BAR2");
-    createContacts(DateTime.parse("2000-06-01T00:00:00.000Z"));
 
     // Create domain example.bar.foo.tld
     assertThatCommand(
@@ -1149,7 +1140,6 @@ class EppLifecycleDomainTest extends EppTestCase {
     createTld("tld.foo");
 
     assertThatLoginSucceeds("NewRegistrar", "foo-BAR2");
-    createContacts(DateTime.parse("2000-06-01T00:00:00.000Z"));
 
     // Create domain example.tld.foo
     assertThatCommand(
@@ -1199,7 +1189,7 @@ class EppLifecycleDomainTest extends EppTestCase {
         .atTime(sunriseDate.minusDays(3))
         .hasSuccessfulLogin();
 
-    createContactsAndHosts();
+    createHosts();
 
     // During pre-delegation, any create should fail both with and without mark
     assertThatCommand("domain_create_sunrise_encoded_mark.xml", ImmutableMap.of("SMD", ENCODED_SMD))
@@ -1227,9 +1217,10 @@ class EppLifecycleDomainTest extends EppTestCase {
         .hasResponse(
             "response_error.xml",
             ImmutableMap.of(
-                "CODE", "2306",
+                "CODE",
+                "2306",
                 "MSG",
-                    "Declared launch extension phase does not match the current registry phase"));
+                "Declared launch extension phase does not match the current registry phase"));
 
     // During sunrise, create with mark will succeed but without will fail.
     // We also test we can delete without a mark.
@@ -1247,8 +1238,7 @@ class EppLifecycleDomainTest extends EppTestCase {
         .hasResponse("generic_success_response.xml");
 
     assertThatCommand(
-            "domain_create_no_hosts_or_dsdata.xml",
-            ImmutableMap.of("DOMAIN", "general.example"))
+            "domain_create_no_hosts_or_dsdata.xml", ImmutableMap.of("DOMAIN", "general.example"))
         .atTime(sunriseDate.plusDays(2))
         .hasResponse(
             "response_error.xml",
@@ -1262,9 +1252,10 @@ class EppLifecycleDomainTest extends EppTestCase {
         .hasResponse(
             "response_error.xml",
             ImmutableMap.of(
-                "CODE", "2306",
+                "CODE",
+                "2306",
                 "MSG",
-                    "Declared launch extension phase does not match the current registry phase"));
+                "Declared launch extension phase does not match the current registry phase"));
 
     assertThatCommand(
             "domain_create_no_hosts_or_dsdata.xml", ImmutableMap.of("DOMAIN", "general.example"))
@@ -1296,7 +1287,7 @@ class EppLifecycleDomainTest extends EppTestCase {
         .atTime(sunriseDate.minusDays(3))
         .hasSuccessfulLogin();
 
-    createContactsAndHosts();
+    createHosts();
 
     // During start-date sunrise, create with mark will succeed but without will fail.
     // We also test we can delete without a mark.
@@ -1451,7 +1442,6 @@ class EppLifecycleDomainTest extends EppTestCase {
   void testDomainUpdateBySuperuser_sendsPollMessage() throws Exception {
     setIsSuperuser(false);
     assertThatLoginSucceeds("NewRegistrar", "foo-BAR2");
-    createContacts(DateTime.parse("2000-06-01T00:00:00Z"));
 
     // Create domain example.tld
     assertThatCommand(

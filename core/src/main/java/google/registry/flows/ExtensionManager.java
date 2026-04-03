@@ -34,8 +34,8 @@ import google.registry.model.domain.metadata.MetadataExtension;
 import google.registry.model.domain.superuser.SuperuserExtension;
 import google.registry.model.eppinput.EppInput;
 import google.registry.model.eppinput.EppInput.CommandExtension;
+import jakarta.inject.Inject;
 import java.util.Set;
-import javax.inject.Inject;
 
 /**
  * Helper to validate extensions on an EPP command.
@@ -105,7 +105,7 @@ public final class ExtensionManager {
   }
 
   private static final ImmutableSet<EppRequestSource> ALLOWED_METADATA_EPP_REQUEST_SOURCES =
-      ImmutableSet.of(EppRequestSource.TOOL, EppRequestSource.BACKEND);
+      ImmutableSet.of(EppRequestSource.BACKEND, EppRequestSource.CONSOLE, EppRequestSource.TOOL);
 
   private void checkForRestrictedExtensions(
       ImmutableSet<Class<? extends CommandExtension>> suppliedExtensions)
@@ -164,8 +164,10 @@ public final class ExtensionManager {
   /** Service extension(s) must be declared at login. */
   public static class UndeclaredServiceExtensionException extends CommandUseErrorException {
     public UndeclaredServiceExtensionException(Set<String> undeclaredUris) {
-      super(String.format("Service extension(s) must be declared at login: %s",
-            Joiner.on(", ").join(undeclaredUris)));
+      super(
+          String.format(
+              "Service extension(s) must be declared at login: %s",
+              Joiner.on(", ").join(undeclaredUris)));
     }
   }
 

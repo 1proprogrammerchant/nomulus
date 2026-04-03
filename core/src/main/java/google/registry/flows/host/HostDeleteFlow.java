@@ -15,6 +15,7 @@
 package google.registry.flows.host;
 
 import static google.registry.dns.DnsUtils.requestHostDnsRefresh;
+import static google.registry.flows.FlowUtils.DELETE_PROHIBITED_STATUSES;
 import static google.registry.flows.FlowUtils.validateRegistrarIsLoggedIn;
 import static google.registry.flows.ResourceFlowUtils.checkLinkedDomains;
 import static google.registry.flows.ResourceFlowUtils.loadAndVerifyExistence;
@@ -30,7 +31,7 @@ import google.registry.flows.ExtensionManager;
 import google.registry.flows.FlowModule.RegistrarId;
 import google.registry.flows.FlowModule.Superuser;
 import google.registry.flows.FlowModule.TargetId;
-import google.registry.flows.TransactionalFlow;
+import google.registry.flows.MutatingFlow;
 import google.registry.flows.annotations.ReportingSpec;
 import google.registry.model.EppResource;
 import google.registry.model.domain.metadata.MetadataExtension;
@@ -41,7 +42,7 @@ import google.registry.model.host.Host;
 import google.registry.model.host.HostHistory;
 import google.registry.model.reporting.HistoryEntry.Type;
 import google.registry.model.reporting.IcannReportingTypes.ActivityReportField;
-import javax.inject.Inject;
+import jakarta.inject.Inject;
 import org.joda.time.DateTime;
 
 /**
@@ -63,13 +64,7 @@ import org.joda.time.DateTime;
  * @error {@link HostFlowUtils.HostNameNotPunyCodedException}
  */
 @ReportingSpec(ActivityReportField.HOST_DELETE)
-public final class HostDeleteFlow implements TransactionalFlow {
-
-  private static final ImmutableSet<StatusValue> DISALLOWED_STATUSES =
-      ImmutableSet.of(
-          StatusValue.CLIENT_DELETE_PROHIBITED,
-          StatusValue.PENDING_DELETE,
-          StatusValue.SERVER_DELETE_PROHIBITED);
+public final class HostDeleteFlow implements MutatingFlow {
 
   @Inject ExtensionManager extensionManager;
   @Inject @RegistrarId String registrarId;
@@ -89,10 +84,11 @@ public final class HostDeleteFlow implements TransactionalFlow {
     extensionManager.validate();
     DateTime now = tm().getTransactionTime();
     validateHostName(targetId);
-    checkLinkedDomains(targetId, now, Host.class);
+    checkLinkedDomains(targetId, now);
     Host existingHost = loadAndVerifyExistence(Host.class, targetId, now);
-    verifyNoDisallowedStatuses(existingHost, DISALLOWED_STATUSES);
+    verifyNoDisallowedStatuses(existingHost, ImmutableSet.of(StatusValue.PENDING_DELETE));
     if (!isSuperuser) {
+      verifyNoDisallowedStatuses(existingHost, DELETE_PROHIBITED_STATUSES);
       // Hosts transfer with their superordinate domains, so for hosts with a superordinate domain,
       // the client id, needs to be read off of it.
       EppResource owningResource =

@@ -15,14 +15,13 @@
 package google.registry.flows;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.common.truth.Truth8.assertThat;
 import static google.registry.testing.DatabaseHelper.getOnlyHistoryEntryOfType;
 import static google.registry.testing.DatabaseHelper.loadAllOf;
 import static google.registry.testing.DatabaseHelper.stripBillingEventId;
 import static google.registry.testing.TestDataHelper.loadFile;
 import static google.registry.xml.XmlTestUtils.assertXmlEqualsWithMessage;
+import static jakarta.servlet.http.HttpServletResponse.SC_OK;
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static javax.servlet.http.HttpServletResponse.SC_OK;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -43,7 +42,6 @@ import google.registry.persistence.VKey;
 import google.registry.testing.FakeClock;
 import google.registry.testing.FakeHttpSession;
 import google.registry.testing.FakeResponse;
-import google.registry.util.ProxyHttpHeaders;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -126,10 +124,6 @@ public class EppTestCase {
       setUpSession();
       FakeResponse response = executeXmlCommand(input);
 
-      // Check that the logged-in header was added to the response
-      assertThat(response.getHeaders())
-          .isEqualTo(ImmutableMap.of(ProxyHttpHeaders.LOGGED_IN, "true"));
-
       verifyAndReturnOutput(response.getPayload(), expectedOutput, inputFilename, outputFilename);
     }
 
@@ -145,10 +139,6 @@ public class EppTestCase {
       String expectedOutput = loadFile(EppTestCase.class, outputFilename, outputSubstitutions);
       setUpSession();
       FakeResponse response = executeXmlCommand(input);
-
-      // Checks that the Logged-In header is not in the response. If testing the login command, use
-      // assertLoginCommandAndResponse instead of this method.
-      assertThat(response.getHeaders()).doesNotContainEntry(ProxyHttpHeaders.LOGGED_IN, "true");
 
       return verifyAndReturnOutput(
           response.getPayload(), expectedOutput, inputFilename, outputFilename);
@@ -233,10 +223,9 @@ public class EppTestCase {
     return eppMetricBuilder.build();
   }
 
-  /** Create the two administrative contacts and two hosts. */
-  void createContactsAndHosts() throws Exception {
+  /** Create the two hosts. */
+  void createHosts() throws Exception {
     DateTime createTime = DateTime.parse("2000-06-01T00:00:00Z");
-    createContacts(createTime);
     assertThatCommand("host_create.xml", ImmutableMap.of("HOSTNAME", "ns1.example.external"))
         .atTime(createTime.plusMinutes(2))
         .hasResponse(
@@ -253,21 +242,9 @@ public class EppTestCase {
                 "CRDATE", createTime.plusMinutes(3).toString()));
   }
 
-  protected void createContacts(DateTime createTime) throws Exception {
-    assertThatCommand("contact_create_sh8013.xml")
-        .atTime(createTime)
-        .hasResponse(
-            "contact_create_response_sh8013.xml", ImmutableMap.of("CRDATE", createTime.toString()));
-    assertThatCommand("contact_create_jd1234.xml")
-        .atTime(createTime.plusMinutes(1))
-        .hasResponse(
-            "contact_create_response_jd1234.xml",
-            ImmutableMap.of("CRDATE", createTime.plusMinutes(1).toString()));
-  }
-
   /** Creates the domain fakesite.example with two nameservers on it. */
   void createFakesite() throws Exception {
-    createContactsAndHosts();
+    createHosts();
     assertThatCommand("domain_create_fakesite.xml")
         .atTime("2000-06-01T00:04:00Z")
         .hasResponse(
@@ -307,7 +284,7 @@ public class EppTestCase {
         .setReason(Reason.CREATE)
         .setTargetId(domain.getDomainName())
         .setRegistrarId(domain.getCurrentSponsorRegistrarId())
-        .setCost(Money.parse("USD 26.00"))
+        .setCost(Money.parse("USD 24.00"))
         .setPeriodYears(2)
         .setEventTime(createTime)
         .setBillingTime(createTime.plus(Tld.get(domain.getTld()).getAddGracePeriodLength()))

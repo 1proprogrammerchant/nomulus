@@ -45,13 +45,12 @@ import google.registry.dns.DnsUtils.TargetType;
 import google.registry.model.common.DnsRefreshRequest;
 import google.registry.model.tld.Tld;
 import google.registry.request.Action;
-import google.registry.request.Action.Service;
 import google.registry.request.Parameter;
 import google.registry.request.auth.Auth;
 import google.registry.util.Clock;
+import jakarta.inject.Inject;
 import java.util.Collection;
 import java.util.Optional;
-import javax.inject.Inject;
 import org.joda.time.DateTime;
 import org.joda.time.Duration;
 
@@ -60,11 +59,11 @@ import org.joda.time.Duration;
  * table.
  */
 @Action(
-    service = Service.BACKEND,
+    service = Action.Service.BACKEND,
     path = "/_dr/task/readDnsRefreshRequests",
     automaticallyPrintOk = true,
     method = POST,
-    auth = Auth.AUTH_API_ADMIN)
+    auth = Auth.AUTH_ADMIN)
 public final class ReadDnsRefreshRequestsAction implements Runnable {
 
   private static final FluentLogger logger = FluentLogger.forEnclosingClass();
@@ -182,9 +181,9 @@ public final class ReadDnsRefreshRequestsAction implements Runnable {
     ImmutableList<String> hosts = hostsBuilder.build();
     for (String dnsWriter : Tld.get(tld).getDnsWriters()) {
       Task task =
-          cloudTasksUtils.createPostTaskWithJitter(
-              PublishDnsUpdatesAction.PATH,
-              Service.BACKEND,
+          cloudTasksUtils.createTaskWithJitter(
+              PublishDnsUpdatesAction.class,
+              POST,
               ImmutableMultimap.<String, String>builder()
                   .put(PARAM_TLD, tld)
                   .put(PARAM_DNS_WRITER, dnsWriter)

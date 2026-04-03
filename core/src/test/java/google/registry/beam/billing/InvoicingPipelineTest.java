@@ -30,12 +30,14 @@ import static org.joda.money.CurrencyUnit.CAD;
 import static org.joda.money.CurrencyUnit.JPY;
 import static org.joda.money.CurrencyUnit.USD;
 
+import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.testing.TestLogHandler;
 import google.registry.beam.TestPipelineExtension;
+import google.registry.beam.billing.BillingEvent.BillingEventCoder;
 import google.registry.model.billing.BillingBase.Flag;
 import google.registry.model.billing.BillingBase.Reason;
 import google.registry.model.billing.BillingCancellation;
@@ -51,13 +53,15 @@ import google.registry.persistence.transaction.JpaTestExtensions.JpaIntegrationT
 import google.registry.testing.FakeClock;
 import google.registry.util.ResourceUtils;
 import java.io.File;
+import java.io.Serial;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.logging.Logger;
-import org.apache.beam.sdk.coders.SerializableCoder;
+import java.util.stream.Collectors;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.transforms.Create;
@@ -195,6 +199,36 @@ class InvoicingPipelineTest {
               0,
               "USD",
               20.0,
+              ""),
+          google.registry.beam.billing.BillingEvent.create(
+              15,
+              DateTime.parse("2017-10-02T00:00:00.0Z"),
+              DateTime.parse("2017-10-04T00:00:00.0Z"),
+              "theRegistrarCopy",
+              "234",
+              "",
+              "test",
+              "CREATE",
+              "mydomainfromanotherclient.test",
+              "REPO-ID",
+              5,
+              "JPY",
+              70.0,
+              ""),
+          google.registry.beam.billing.BillingEvent.create(
+              16,
+              DateTime.parse("2017-10-04T00:00:00Z"),
+              DateTime.parse("2017-10-04T00:00:00Z"),
+              "theRegistrarCopy",
+              "234",
+              "",
+              "test",
+              "RENEW",
+              "mydomain2fromanotherclient.test",
+              "REPO-ID",
+              3,
+              "USD",
+              20.5,
               ""));
 
   private static final ImmutableMap<String, ImmutableList<String>> EXPECTED_DETAILED_REPORT_MAP =
@@ -220,18 +254,26 @@ class InvoicingPipelineTest {
           "invoice_details_2017-10_anotherRegistrar_test.csv",
           ImmutableList.of(
               "5,2017-10-04 00:00:00 UTC,2017-10-04 00:00:00 UTC,anotherRegistrar,789,,"
-                  + "test,CREATE,mydomain5.test,REPO-ID,1,USD,0.00,SUNRISE ANCHOR_TENANT"));
+                  + "test,CREATE,mydomain5.test,REPO-ID,1,USD,0.00,SUNRISE ANCHOR_TENANT"),
+          "invoice_details_2017-10_theRegistrarCopy_test.csv",
+          ImmutableList.of(
+              "15,2017-10-02 00:00:00 UTC,2017-10-04 00:00:00"
+                  + " UTC,theRegistrarCopy,234,,test,CREATE,mydomainfromanotherclient.test,REPO-ID,5,JPY,70.00,",
+              "16,2017-10-04 00:00:00 UTC,2017-10-04 00:00:00"
+                  + " UTC,theRegistrarCopy,234,,test,RENEW,mydomain2fromanotherclient.test,REPO-ID,3,USD,20.50,"));
 
   private static final ImmutableList<String> EXPECTED_INVOICE_OUTPUT =
       ImmutableList.of(
-          "2017-10-01,2020-09-30,234,41.00,USD,10125,1,PURCHASE,theRegistrar,2,"
+          "2017-10-01,2020-09-30,234,61.50,USD,10125,1,PURCHASE,,3,"
               + "RENEW | TLD: test | TERM: 3-year,20.50,USD,",
-          "2017-10-01,2022-09-30,234,70.00,JPY,10125,1,PURCHASE,theRegistrar,1,"
+          "2017-10-01,2022-09-30,234,70.00,JPY,10125,1,PURCHASE,,1,"
               + "CREATE | TLD: hello | TERM: 5-year,70.00,JPY,",
-          "2017-10-01,,234,20.00,USD,10125,1,PURCHASE,theRegistrar,1,"
+          "2017-10-01,,234,20.00,USD,10125,1,PURCHASE,,1,"
               + "SERVER_STATUS | TLD: test | TERM: 0-year,20.00,USD,",
-          "2017-10-01,2018-09-30,456,20.50,USD,10125,1,PURCHASE,bestdomains,1,"
-              + "RENEW | TLD: test | TERM: 1-year,20.50,USD,116688");
+          "2017-10-01,2018-09-30,456,20.50,USD,10125,1,PURCHASE,,1,"
+              + "RENEW | TLD: test | TERM: 1-year,20.50,USD,116688",
+          "2017-10-01,2022-09-30,234,70.00,JPY,10125,1,PURCHASE,,1,CREATE | TLD: test | TERM:"
+              + " 5-year,70.00,JPY,");
 
   private final InvoicingPipelineOptions options =
       PipelineOptionsFactory.create().as(InvoicingPipelineOptions.class);
@@ -251,9 +293,7 @@ class InvoicingPipelineTest {
     options.setYearMonth(YEAR_MONTH);
     options.setInvoiceFilePrefix(INVOICE_FILE_PREFIX);
     billingEvents =
-        pipeline.apply(
-            Create.of(INPUT_EVENTS)
-                .withCoder(SerializableCoder.of(google.registry.beam.billing.BillingEvent.class)));
+        pipeline.apply(Create.of(INPUT_EVENTS).withCoder(BillingEventCoder.ofNullable()));
   }
 
   @Test
@@ -295,7 +335,7 @@ class InvoicingPipelineTest {
             .build();
     persistResource(registrar);
     Tld test =
-        newTld("test", "_TEST", ImmutableSortedMap.of(START_OF_TIME, GENERAL_AVAILABILITY))
+        newTld("test", "TEST", ImmutableSortedMap.of(START_OF_TIME, GENERAL_AVAILABILITY))
             .asBuilder()
             .setInvoicingEnabled(true)
             .build();
@@ -346,26 +386,28 @@ class InvoicingPipelineTest {
 
   @Test
   void testSuccess_makeCloudSqlQuery() throws Exception {
-    // Pipeline must be run due to the TestPipelineExtension
+    // The Pipeline must run due to TestPipelineExtension's checks.
     pipeline.run().waitUntilFinish();
     // Test that comments are removed from the .sql file correctly
     assertThat(InvoicingPipeline.makeCloudSqlQuery("2017-10"))
         .isEqualTo(
-            '\n'
-                + "SELECT b, r FROM BillingEvent b\n"
-                + "JOIN Registrar r ON b.clientId = r.registrarId\n"
-                + "JOIN Domain d ON b.domainRepoId = d.repoId\n"
-                + "JOIN Tld t ON t.tldStr = d.tld\n"
-                + "LEFT JOIN BillingCancellation c ON b.id = c.billingEvent\n"
-                + "LEFT JOIN BillingCancellation cr ON b.cancellationMatchingBillingEvent ="
-                + " cr.billingRecurrence\n"
-                + "WHERE r.billingAccountMap IS NOT NULL\n"
-                + "AND r.type = 'REAL'\n"
-                + "AND t.invoicingEnabled IS TRUE\n"
-                + "AND b.billingTime BETWEEN CAST('2017-10-01' AS timestamp) AND CAST('2017-11-01'"
-                + " AS timestamp)\n"
-                + "AND c.id IS NULL\n"
-                + "AND cr.id IS NULL\n");
+"""
+
+SELECT b, r FROM BillingEvent b
+JOIN Registrar r ON b.clientId = r.registrarId
+JOIN Domain d ON b.domainRepoId = d.repoId
+JOIN Tld t ON t.tldStr = d.tld
+LEFT JOIN BillingCancellation c ON b.id = c.billingEvent
+LEFT JOIN BillingCancellation cr ON b.cancellationMatchingBillingEvent = cr.billingRecurrence
+WHERE r.billingAccountMap IS NOT NULL
+AND r.type = 'REAL'
+AND t.invoicingEnabled IS TRUE
+AND CAST(b.billingTime AS timestamp)
+    BETWEEN CAST('2017-10-01T00:00:00Z' AS timestamp)
+    AND CAST('2017-11-01T00:00:00Z' AS timestamp)
+AND c.id IS NULL
+AND cr.id IS NULL
+""");
   }
 
   /** Returns the text contents of a file under the beamBucket/results directory. */
@@ -387,6 +429,13 @@ class InvoicingPipelineTest {
             .setBillingAccountMap(ImmutableMap.of(JPY, "234", USD, "234"))
             .build();
     persistResource(registrar1);
+    Registrar registrar11 = persistNewRegistrar("theRegistrarCopy");
+    registrar11 =
+        registrar11
+            .asBuilder()
+            .setBillingAccountMap(ImmutableMap.of(JPY, "234", USD, "234"))
+            .build();
+    persistResource(registrar11);
     Registrar registrar2 = persistNewRegistrar("bestdomains");
     registrar2 =
         registrar2
@@ -400,13 +449,13 @@ class InvoicingPipelineTest {
     persistResource(registrar3);
 
     Tld test =
-        newTld("test", "_TEST", ImmutableSortedMap.of(START_OF_TIME, GENERAL_AVAILABILITY))
+        newTld("test", "TEST", ImmutableSortedMap.of(START_OF_TIME, GENERAL_AVAILABILITY))
             .asBuilder()
             .setInvoicingEnabled(true)
             .build();
     persistResource(test);
     Tld hello =
-        newTld("hello", "_HELLO", ImmutableSortedMap.of(START_OF_TIME, GENERAL_AVAILABILITY))
+        newTld("hello", "HELLO", ImmutableSortedMap.of(START_OF_TIME, GENERAL_AVAILABILITY))
             .asBuilder()
             .setInvoicingEnabled(true)
             .build();
@@ -543,6 +592,21 @@ class InvoicingPipelineTest {
             .setDomainHistory(domainHistoryRecurrence)
             .build();
     persistResource(cancellationRecurrence);
+
+    // Domains created for registrar with = key but != client id.
+    Domain domain14 = persistActiveDomain("mydomainfromanotherclient.test");
+    Domain domain15 = persistActiveDomain("mydomain2fromanotherclient.test");
+
+    persistBillingEvent(
+        15,
+        domain14,
+        registrar11,
+        Reason.CREATE,
+        5,
+        Money.ofMajor(JPY, 70),
+        DateTime.parse("2017-10-04T00:00:00.0Z"),
+        DateTime.parse("2017-10-02T00:00:00.0Z"));
+    persistBillingEvent(16, domain15, registrar11, Reason.RENEW, 3, Money.of(USD, 20.5));
   }
 
   private static DomainHistory persistDomainHistory(Domain domain, Registrar registrar) {
@@ -604,31 +668,43 @@ class InvoicingPipelineTest {
           PCollection<google.registry.beam.billing.BillingEvent>,
           PCollection<google.registry.beam.billing.BillingEvent>> {
 
-    private static final long serialVersionUID = 2695033474967615250L;
+    private static final Splitter FLAG_SPLITTER = Splitter.on(' ').omitEmptyStrings();
+
+    @Serial private static final long serialVersionUID = 2695033474967615250L;
 
     @Override
     public PCollection<google.registry.beam.billing.BillingEvent> expand(
         PCollection<google.registry.beam.billing.BillingEvent> input) {
-      return input.apply(
-          "Map to invoicing key",
-          MapElements.into(TypeDescriptor.of(google.registry.beam.billing.BillingEvent.class))
-              .via(
-                  billingEvent ->
-                      google.registry.beam.billing.BillingEvent.create(
-                          billingEvent.id(),
-                          billingEvent.billingTime(),
-                          billingEvent.eventTime(),
-                          billingEvent.registrarId(),
-                          billingEvent.billingId(),
-                          billingEvent.poNumber(),
-                          billingEvent.tld(),
-                          billingEvent.action(),
-                          billingEvent.domain(),
-                          "REPO-ID",
-                          billingEvent.years(),
-                          billingEvent.currency(),
-                          billingEvent.amount(),
-                          billingEvent.flags())));
+      return input
+          .apply(
+              "Map to invoicing key",
+              MapElements.into(TypeDescriptor.of(google.registry.beam.billing.BillingEvent.class))
+                  .via(
+                      billingEvent ->
+                          google.registry.beam.billing.BillingEvent.create(
+                              billingEvent.id(),
+                              billingEvent.billingTime(),
+                              billingEvent.eventTime(),
+                              billingEvent.registrarId(),
+                              billingEvent.billingId(),
+                              billingEvent.poNumber(),
+                              billingEvent.tld(),
+                              billingEvent.action(),
+                              billingEvent.domain(),
+                              "REPO-ID",
+                              billingEvent.years(),
+                              billingEvent.currency(),
+                              billingEvent.amount(),
+                              normalizeBillingEventFlags(billingEvent.flags()))))
+          .setCoder(BillingEventCoder.ofNullable());
+    }
+
+    // Returns flags in sorted order for easy comparison.
+    private static String normalizeBillingEventFlags(String flags) {
+      return FLAG_SPLITTER
+          .splitToStream(flags)
+          .sorted(Comparator.<String>naturalOrder().reversed())
+          .collect(Collectors.joining(" "));
     }
   }
 }

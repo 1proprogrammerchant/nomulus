@@ -42,7 +42,7 @@ import google.registry.flows.ExtensionManager;
 import google.registry.flows.FlowModule.RegistrarId;
 import google.registry.flows.FlowModule.Superuser;
 import google.registry.flows.FlowModule.TargetId;
-import google.registry.flows.TransactionalFlow;
+import google.registry.flows.MutatingFlow;
 import google.registry.flows.annotations.ReportingSpec;
 import google.registry.model.ImmutableObject;
 import google.registry.model.billing.BillingBase.Reason;
@@ -68,8 +68,8 @@ import google.registry.model.reporting.DomainTransactionRecord.TransactionReport
 import google.registry.model.reporting.HistoryEntry.HistoryEntryId;
 import google.registry.model.reporting.IcannReportingTypes.ActivityReportField;
 import google.registry.model.tld.Tld;
+import jakarta.inject.Inject;
 import java.util.Optional;
-import javax.inject.Inject;
 import org.joda.money.Money;
 import org.joda.time.DateTime;
 
@@ -112,7 +112,7 @@ import org.joda.time.DateTime;
  * @error {@link DomainRestoreRequestFlow.RestoreCommandIncludesChangesException}
  */
 @ReportingSpec(ActivityReportField.DOMAIN_RGP_RESTORE_REQUEST)
-public final class DomainRestoreRequestFlow implements TransactionalFlow {
+public final class DomainRestoreRequestFlow implements MutatingFlow {
 
   @Inject ResourceCommand resourceCommand;
   @Inject ExtensionManager extensionManager;
@@ -138,7 +138,7 @@ public final class DomainRestoreRequestFlow implements TransactionalFlow {
     Update command = (Update) resourceCommand;
     DateTime now = tm().getTransactionTime();
     Domain existingDomain = loadAndVerifyExistence(Domain.class, targetId, now);
-    boolean isExpired = existingDomain.getRegistrationExpirationTime().isBefore(now);
+    boolean isExpired = existingDomain.getRegistrationExpirationDateTime().isBefore(now);
     FeesAndCredits feesAndCredits =
         pricingLogic.getRestorePrice(Tld.get(existingDomain.getTld()), targetId, now, isExpired);
     Optional<FeeUpdateCommandExtension> feeUpdate =
@@ -146,18 +146,18 @@ public final class DomainRestoreRequestFlow implements TransactionalFlow {
     verifyRestoreAllowed(command, existingDomain, feeUpdate, feesAndCredits, now);
     HistoryEntryId domainHistoryId = createHistoryEntryId(existingDomain);
     historyBuilder.setRevisionId(domainHistoryId.getRevisionId());
-    ImmutableSet.Builder<ImmutableObject> entitiesToSave = new ImmutableSet.Builder<>();
+    ImmutableSet.Builder<ImmutableObject> entitiesToInsert = new ImmutableSet.Builder<>();
 
     DateTime newExpirationTime =
-        existingDomain.getRegistrationExpirationTime().plusYears(isExpired ? 1 : 0);
+        existingDomain.getRegistrationExpirationDateTime().plusYears(isExpired ? 1 : 0);
     // Restore the expiration time on the deleted domain, except if that's already passed, then add
     // a year and bill for it immediately, with no grace period.
     if (isExpired) {
-      entitiesToSave.add(
+      entitiesToInsert.add(
           createRenewBillingEvent(domainHistoryId, feesAndCredits.getRenewCost(), now));
     }
     // Always bill for the restore itself.
-    entitiesToSave.add(
+    entitiesToInsert.add(
         createRestoreBillingEvent(domainHistoryId, feesAndCredits.getRestoreCost(), now));
 
     BillingRecurrence autorenewEvent =
@@ -166,12 +166,14 @@ public final class DomainRestoreRequestFlow implements TransactionalFlow {
             .setRecurrenceEndTime(END_OF_TIME)
             .setDomainHistoryId(domainHistoryId)
             .build();
+    entitiesToInsert.add(autorenewEvent);
     PollMessage.Autorenew autorenewPollMessage =
         newAutorenewPollMessage(existingDomain)
             .setEventTime(newExpirationTime)
             .setAutorenewEndTime(END_OF_TIME)
             .setDomainHistoryId(domainHistoryId)
             .build();
+    entitiesToInsert.add(autorenewPollMessage);
     Domain newDomain =
         performRestore(
             existingDomain,
@@ -181,9 +183,12 @@ public final class DomainRestoreRequestFlow implements TransactionalFlow {
             now,
             registrarId);
     DomainHistory domainHistory = buildDomainHistory(newDomain, now);
-    entitiesToSave.add(newDomain, domainHistory, autorenewEvent, autorenewPollMessage);
-    tm().putAll(entitiesToSave.build());
-    tm().delete(existingDomain.getDeletePollMessage());
+    entitiesToInsert.add(domainHistory);
+    tm().update(newDomain);
+    tm().insertAll(entitiesToInsert.build());
+    if (existingDomain.getDeletePollMessage() != null) {
+      tm().delete(existingDomain.getDeletePollMessage());
+    }
     requestDomainDnsRefresh(existingDomain.getDomainName());
     return responseBuilder
         .setExtensions(createResponseExtensions(feesAndCredits, feeUpdate, isExpired))

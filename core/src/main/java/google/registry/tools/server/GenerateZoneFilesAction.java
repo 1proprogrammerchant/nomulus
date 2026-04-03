@@ -37,6 +37,7 @@ import google.registry.request.HttpException.BadRequestException;
 import google.registry.request.JsonActionRunner;
 import google.registry.request.auth.Auth;
 import google.registry.util.Clock;
+import jakarta.inject.Inject;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
@@ -46,11 +47,9 @@ import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.util.List;
 import java.util.Map;
-import javax.inject.Inject;
 import org.hibernate.CacheMode;
 import org.hibernate.ScrollMode;
 import org.hibernate.ScrollableResults;
-import org.hibernate.query.Query;
 import org.joda.time.DateTime;
 import org.joda.time.Duration;
 
@@ -62,10 +61,10 @@ import org.joda.time.Duration;
  * days in the past, and must be at midnight UTC.
  */
 @Action(
-    service = Action.Service.TOOLS,
+    service = Action.Service.BACKEND,
     path = GenerateZoneFilesAction.PATH,
     method = POST,
-    auth = Auth.AUTH_API_ADMIN)
+    auth = Auth.AUTH_ADMIN)
 public class GenerateZoneFilesAction implements Runnable, JsonActionRunner.JsonAction {
 
   private static final FluentLogger log = FluentLogger.forEnclosingClass();
@@ -159,15 +158,15 @@ public class GenerateZoneFilesAction implements Runnable, JsonActionRunner.JsonA
 
   private ImmutableList<String> getStanzasForTld(String tld, DateTime exportTime) {
     ImmutableList.Builder<String> result = new ImmutableList.Builder<>();
-    ScrollableResults scrollableResults =
-        tm().query("FROM Domain WHERE tld = :tld AND deletionTime > :exportTime")
+    ScrollableResults<Domain> scrollableResults =
+        tm().query("FROM Domain WHERE tld = :tld AND deletionTime > :exportTime", Domain.class)
             .setParameter("tld", tld)
             .setParameter("exportTime", exportTime)
-            .unwrap(Query.class)
+            .unwrap(org.hibernate.query.SelectionQuery.class)
             .setCacheMode(CacheMode.IGNORE)
             .scroll(ScrollMode.FORWARD_ONLY);
     for (int i = 1; scrollableResults.next(); i = (i + 1) % BATCH_SIZE) {
-      Domain domain = (Domain) scrollableResults.get(0);
+      Domain domain = scrollableResults.get();
       populateStanzasForDomain(domain, exportTime, result);
       if (i == 0) {
         tm().getEntityManager().flush();

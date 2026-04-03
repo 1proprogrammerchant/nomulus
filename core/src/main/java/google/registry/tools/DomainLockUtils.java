@@ -16,7 +16,6 @@ package google.registry.tools;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static google.registry.batch.AsyncTaskEnqueuer.QUEUE_ASYNC_ACTIONS;
-import static google.registry.model.EppResourceUtils.loadByForeignKeyCached;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
 import static google.registry.tools.LockOrUnlockDomainCommand.REGISTRY_LOCK_STATUSES;
 
@@ -26,6 +25,7 @@ import com.google.common.collect.Sets;
 import google.registry.batch.CloudTasksUtils;
 import google.registry.batch.RelockDomainAction;
 import google.registry.config.RegistryConfig.Config;
+import google.registry.model.ForeignKeyUtils;
 import google.registry.model.billing.BillingBase.Reason;
 import google.registry.model.billing.BillingEvent;
 import google.registry.model.domain.Domain;
@@ -34,12 +34,12 @@ import google.registry.model.domain.RegistryLock;
 import google.registry.model.reporting.HistoryEntry;
 import google.registry.model.tld.RegistryLockDao;
 import google.registry.model.tld.Tld;
-import google.registry.request.Action.Service;
+import google.registry.request.Action;
 import google.registry.util.StringGenerator;
+import jakarta.inject.Inject;
+import jakarta.inject.Named;
 import java.util.Optional;
 import javax.annotation.Nullable;
-import javax.inject.Inject;
-import javax.inject.Named;
 import org.joda.time.DateTime;
 import org.joda.time.Duration;
 
@@ -71,20 +71,21 @@ public final class DomainLockUtils {
   /**
    * Creates and persists a lock request when requested by a user.
    *
-   * <p>The lock will not be applied until {@link #verifyAndApplyLock} is called.
+   * <p>The lock will not be applied until {@link #verifyVerificationCode} is called.
    */
   public RegistryLock saveNewRegistryLockRequest(
-      String domainName, String registrarId, @Nullable String registrarPocId, boolean isAdmin) {
+      String domainName, String registrarId, @Nullable String registryLockEmail, boolean isAdmin) {
     return tm().transact(
             () ->
                 RegistryLockDao.save(
-                    createLockBuilder(domainName, registrarId, registrarPocId, isAdmin).build()));
+                    createLockBuilder(domainName, registrarId, registryLockEmail, isAdmin)
+                        .build()));
   }
 
   /**
    * Creates and persists an unlock request when requested by a user.
    *
-   * <p>The unlock will not be applied until {@link #verifyAndApplyUnlock} is called.
+   * <p>The unlock will not be applied until {@link #verifyVerificationCode} is called.
    */
   public RegistryLock saveNewRegistryUnlockRequest(
       String domainName, String registrarId, boolean isAdmin, Optional<Duration> relockDuration) {
@@ -94,62 +95,32 @@ public final class DomainLockUtils {
                     createUnlockBuilder(domainName, registrarId, isAdmin, relockDuration).build()));
   }
 
-  /** Verifies and applies the lock request previously requested by a user. */
-  public RegistryLock verifyAndApplyLock(String verificationCode, boolean isAdmin) {
-    return tm().transact(
-            () -> {
-              DateTime now = tm().getTransactionTime();
-              RegistryLock lock = getByVerificationCode(verificationCode);
-
-              checkArgument(
-                  !lock.getLockCompletionTime().isPresent(),
-                  "Domain %s is already locked",
-                  lock.getDomainName());
-
-              checkArgument(
-                  !lock.isLockRequestExpired(now),
-                  "The pending lock has expired; please try again");
-
-              checkArgument(
-                  !lock.isSuperuser() || isAdmin, "Non-admin user cannot complete admin lock");
-
-              RegistryLock newLock =
-                  RegistryLockDao.save(lock.asBuilder().setLockCompletionTime(now).build());
-              setAsRelock(newLock);
-              tm().transact(() -> applyLockStatuses(newLock, now, isAdmin));
-              return newLock;
-            });
-  }
-
-  /** Verifies and applies the unlock request previously requested by a user. */
-  public RegistryLock verifyAndApplyUnlock(String verificationCode, boolean isAdmin) {
-    RegistryLock lock =
+  /**
+   * Verifies and applies the lock/unlock request previously requested given a verification code.
+   *
+   * <p>This assumes that the lock object / domain in question has a pending lock or unlock.
+   */
+  public RegistryLock verifyVerificationCode(String verificationCode, boolean isAdmin) {
+    RegistryLock result =
         tm().transact(
                 () -> {
-                  DateTime now = tm().getTransactionTime();
-                  RegistryLock previousLock = getByVerificationCode(verificationCode);
-                  checkArgument(
-                      !previousLock.getUnlockCompletionTime().isPresent(),
-                      "Domain %s is already unlocked",
-                      previousLock.getDomainName());
-
-                  checkArgument(
-                      !previousLock.isUnlockRequestExpired(now),
-                      "The pending unlock has expired; please try again");
-
-                  checkArgument(
-                      isAdmin || !previousLock.isSuperuser(),
-                      "Non-admin user cannot complete admin unlock");
-
-                  RegistryLock newLock =
-                      RegistryLockDao.save(
-                          previousLock.asBuilder().setUnlockCompletionTime(now).build());
-                  tm().transact(() -> removeLockStatuses(newLock, isAdmin, now));
-                  return newLock;
+                  RegistryLock lock = getByVerificationCode(verificationCode);
+                  if (lock.getLockCompletionTime().isEmpty()) {
+                    return verifyAndApplyLock(lock, isAdmin);
+                  } else if (lock.getUnlockRequestTime().isPresent()
+                      && lock.getUnlockCompletionTime().isEmpty()) {
+                    return verifyAndApplyUnlock(lock, isAdmin);
+                  } else {
+                    throw new IllegalArgumentException(
+                        String.format(
+                            "Lock/unlock with code %s is already completed", verificationCode));
+                  }
                 });
-    // Submit relock outside the transaction to make sure that it fully succeeded
-    submitRelockIfNecessary(lock);
-    return lock;
+    if (result.getUnlockCompletionTime().isPresent()) {
+      // Submit relock outside the transaction to make sure that it fully succeeded
+      submitRelockIfNecessary(result);
+    }
+    return result;
   }
 
   /**
@@ -159,16 +130,16 @@ public final class DomainLockUtils {
    * the case of relocks, isAdmin is determined by the previous lock.
    */
   public RegistryLock administrativelyApplyLock(
-      String domainName, String registrarId, @Nullable String registrarPocId, boolean isAdmin) {
+      String domainName, String registrarId, @Nullable String registryLockEmail, boolean isAdmin) {
     return tm().transact(
             () -> {
               DateTime now = tm().getTransactionTime();
               RegistryLock newLock =
                   RegistryLockDao.save(
-                      createLockBuilder(domainName, registrarId, registrarPocId, isAdmin)
+                      createLockBuilder(domainName, registrarId, registryLockEmail, isAdmin)
                           .setLockCompletionTime(now)
                           .build());
-              tm().transact(() -> applyLockStatuses(newLock, now, isAdmin));
+              applyLockStatuses(newLock, now, isAdmin);
               setAsRelock(newLock);
               return newLock;
             });
@@ -190,7 +161,7 @@ public final class DomainLockUtils {
                           createUnlockBuilder(domainName, registrarId, isAdmin, relockDuration)
                               .setUnlockCompletionTime(now)
                               .build());
-                  tm().transact(() -> removeLockStatuses(result, isAdmin, now));
+                  removeLockStatuses(result, isAdmin, now);
                   return result;
                 });
     // Submit relock outside the transaction to make sure that it fully succeeded
@@ -221,9 +192,9 @@ public final class DomainLockUtils {
   public void enqueueDomainRelock(Duration countdown, long lockRevisionId, int previousAttempts) {
     cloudTasksUtils.enqueue(
         QUEUE_ASYNC_ACTIONS,
-        cloudTasksUtils.createPostTaskWithDelay(
-            RelockDomainAction.PATH,
-            Service.BACKEND,
+        cloudTasksUtils.createTaskWithDelay(
+            RelockDomainAction.class,
+            Action.Method.POST,
             ImmutableMultimap.of(
                 RelockDomainAction.OLD_UNLOCK_REVISION_ID_PARAM,
                 String.valueOf(lockRevisionId),
@@ -232,17 +203,40 @@ public final class DomainLockUtils {
             countdown));
   }
 
+  private RegistryLock verifyAndApplyLock(RegistryLock lock, boolean isAdmin) {
+    DateTime now = tm().getTransactionTime();
+    checkArgument(
+        !lock.isLockRequestExpired(now), "The pending lock has expired; please try again");
+
+    checkArgument(!lock.isSuperuser() || isAdmin, "Non-admin user cannot complete admin lock");
+
+    RegistryLock newLock =
+        RegistryLockDao.save(lock.asBuilder().setLockCompletionTime(now).build());
+    setAsRelock(newLock);
+    applyLockStatuses(newLock, now, isAdmin);
+    return newLock;
+  }
+
+  private RegistryLock verifyAndApplyUnlock(RegistryLock lock, boolean isAdmin) {
+    DateTime now = tm().getTransactionTime();
+    checkArgument(
+        !lock.isUnlockRequestExpired(now), "The pending unlock has expired; please try again");
+
+    checkArgument(isAdmin || !lock.isSuperuser(), "Non-admin user cannot complete admin unlock");
+
+    RegistryLock newLock =
+        RegistryLockDao.save(lock.asBuilder().setUnlockCompletionTime(now).build());
+    removeLockStatuses(newLock, isAdmin, now);
+    return newLock;
+  }
+
   private void setAsRelock(RegistryLock newLock) {
-    tm().transact(
-            () ->
-                RegistryLockDao.getMostRecentVerifiedUnlockByRepoId(newLock.getRepoId())
-                    .ifPresent(
-                        oldLock ->
-                            RegistryLockDao.save(oldLock.asBuilder().setRelock(newLock).build())));
+    RegistryLockDao.getMostRecentVerifiedUnlockByRepoId(newLock.getRepoId())
+        .ifPresent(oldLock -> RegistryLockDao.save(oldLock.asBuilder().setRelock(newLock).build()));
   }
 
   private RegistryLock.Builder createLockBuilder(
-      String domainName, String registrarId, @Nullable String registrarPocId, boolean isAdmin) {
+      String domainName, String registrarId, @Nullable String registryLockEmail, boolean isAdmin) {
     DateTime now = tm().getTransactionTime();
     Domain domain = getDomain(domainName, registrarId, now);
     verifyDomainNotLocked(domain, isAdmin);
@@ -262,7 +256,7 @@ public final class DomainLockUtils {
         .setDomainName(domainName)
         .setRepoId(domain.getRepoId())
         .setRegistrarId(registrarId)
-        .setRegistrarPocId(registrarPocId)
+        .setRegistryLockEmail(registryLockEmail)
         .isSuperuser(isAdmin);
   }
 
@@ -298,7 +292,7 @@ public final class DomainLockUtils {
       checkArgument(
           lock.isLocked(), "Lock object for domain %s is not currently locked", domainName);
       checkArgument(
-          !lock.getUnlockRequestTime().isPresent() || lock.isUnlockRequestExpired(now),
+          lock.getUnlockRequestTime().isEmpty() || lock.isUnlockRequestExpired(now),
           "A pending unlock action already exists for %s",
           domainName);
       checkArgument(
@@ -333,7 +327,7 @@ public final class DomainLockUtils {
 
   private Domain getDomain(String domainName, String registrarId, DateTime now) {
     Domain domain =
-        loadByForeignKeyCached(Domain.class, domainName, now)
+        ForeignKeyUtils.loadResource(Domain.class, domainName, now)
             .orElseThrow(() -> new IllegalArgumentException("Domain doesn't exist"));
     // The user must have specified either the correct registrar ID or the admin registrar ID
     checkArgument(
@@ -350,7 +344,7 @@ public final class DomainLockUtils {
         .orElseThrow(
             () ->
                 new IllegalArgumentException(
-                    String.format("Invalid verification code %s", verificationCode)));
+                    String.format("Invalid verification code \"%s\"", verificationCode)));
   }
 
   private void applyLockStatuses(RegistryLock lock, DateTime lockTime, boolean isAdmin) {

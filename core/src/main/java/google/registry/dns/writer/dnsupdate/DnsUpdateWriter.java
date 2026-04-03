@@ -19,7 +19,6 @@ import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.Sets.intersection;
 import static com.google.common.collect.Sets.union;
 import static google.registry.dns.DnsUtils.getDnsAPlusAAAATtlForHost;
-import static google.registry.model.EppResourceUtils.loadByForeignKey;
 
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
@@ -28,18 +27,19 @@ import com.google.common.net.InternetDomainName;
 import google.registry.config.RegistryConfig.Config;
 import google.registry.dns.writer.BaseDnsWriter;
 import google.registry.dns.writer.DnsWriterZone;
+import google.registry.model.ForeignKeyUtils;
 import google.registry.model.domain.Domain;
 import google.registry.model.domain.secdns.DomainDsData;
 import google.registry.model.host.Host;
 import google.registry.model.tld.Tld;
 import google.registry.model.tld.Tlds;
 import google.registry.util.Clock;
+import jakarta.inject.Inject;
 import java.io.IOException;
 import java.net.Inet4Address;
 import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.util.Optional;
-import javax.inject.Inject;
 import org.joda.time.Duration;
 import org.xbill.DNS.AAAARecord;
 import org.xbill.DNS.ARecord;
@@ -55,14 +55,14 @@ import org.xbill.DNS.Type;
 import org.xbill.DNS.Update;
 
 /**
- * A DnsWriter that implements the DNS UPDATE protocol as specified in
- * <a href="https://tools.ietf.org/html/rfc2136">RFC 2136</a>. Publishes changes in the
- * domain-registry to a (capable) external DNS server, sometimes called a "hidden master". DNS
- * UPDATE messages are sent via a supplied "transport" class.
+ * A DnsWriter that implements the DNS UPDATE protocol as specified in <a
+ * href="https://tools.ietf.org/html/rfc2136">RFC 2136</a>. Publishes changes in the domain-registry
+ * to a (capable) external DNS server, sometimes called a "hidden master". DNS UPDATE messages are
+ * sent via a supplied "transport" class.
  *
- * On call to {@link #commit()}, a single UPDATE message is created containing the records required
- * to "synchronize" the DNS with the current (at the time of processing) state of the registry, for
- * the supplied domain/host.
+ * <p>On call to {@link #commit()}, a single UPDATE message is created containing the records
+ * required to "synchronize" the DNS with the current (at the time of processing) state of the
+ * registry, for the supplied domain/host.
  *
  * <p>The general strategy of the publish methods is to delete <em>all</em> resource records of any
  * <em>type</em> that match the exact domain/host name supplied. And then for create/update cases,
@@ -73,8 +73,8 @@ import org.xbill.DNS.Update;
  * <p>Only NS, DS, A, and AAAA records are published, and in particular no DNSSEC signing is done
  * assuming that this will be done by a third party DNS provider.
  *
- * <p>Each commit call is treated as an atomic update to the DNS. If a commit fails an exception
- * is thrown. The SOA record serial number is implicitly incremented by the server on each UPDATE
+ * <p>Each commit call is treated as an atomic update to the DNS. If a commit fails an exception is
+ * thrown. The SOA record serial number is implicitly incremented by the server on each UPDATE
  * message, as required by RFC 2136. Care must be taken to make sure the SOA serial number does not
  * go backwards if the entire TLD (zone) is "reset" to empty and republished.
  */
@@ -129,7 +129,8 @@ public class DnsUpdateWriter extends BaseDnsWriter {
    *     this domain refresh request
    */
   private void publishDomain(String domainName, String requestingHostName) {
-    Optional<Domain> domainOptional = loadByForeignKey(Domain.class, domainName, clock.nowUtc());
+    Optional<Domain> domainOptional =
+        ForeignKeyUtils.loadResource(Domain.class, domainName, clock.nowUtc());
     update.delete(toAbsoluteName(domainName), Type.ANY);
     // If the domain is now deleted, then don't update DNS for it.
     if (domainOptional.isPresent()) {
@@ -157,7 +158,7 @@ public class DnsUpdateWriter extends BaseDnsWriter {
     Optional<InternetDomainName> tld = Tlds.findTldForName(host);
 
     // host not managed by our registry, no need to update DNS.
-    if (!tld.isPresent()) {
+    if (tld.isEmpty()) {
       return;
     }
 
@@ -218,7 +219,7 @@ public class DnsUpdateWriter extends BaseDnsWriter {
   private void addInBailiwickNameServerSet(Domain domain, Update update) {
     for (String hostName :
         intersection(domain.loadNameserverHostNames(), domain.getSubordinateHosts())) {
-      Optional<Host> host = loadByForeignKey(Host.class, hostName, clock.nowUtc());
+      Optional<Host> host = ForeignKeyUtils.loadResource(Host.class, hostName, clock.nowUtc());
       checkState(host.isPresent(), "Host %s cannot be loaded", hostName);
       update.add(makeAddressSet(host.get()));
       update.add(makeV6AddressSet(host.get()));

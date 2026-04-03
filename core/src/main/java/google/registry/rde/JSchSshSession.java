@@ -22,9 +22,9 @@ import com.jcraft.jsch.JSchException;
 import com.jcraft.jsch.Session;
 import com.jcraft.jsch.SftpException;
 import google.registry.config.RegistryConfig.Config;
+import jakarta.inject.Inject;
 import java.io.Closeable;
 import java.net.URI;
-import javax.inject.Inject;
 import org.joda.time.Duration;
 
 /**
@@ -86,8 +86,6 @@ final class JSchSshSession implements Closeable {
   /**
    * Opens a new SFTP channel over this SSH session.
    *
-   * @throws JSchException
-   * @throws SftpException
    * @see JSchSftpChannel
    */
   public JSchSftpChannel openSftpChannel() throws JSchException, SftpException {

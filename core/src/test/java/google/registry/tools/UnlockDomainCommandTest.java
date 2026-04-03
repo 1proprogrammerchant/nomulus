@@ -53,13 +53,14 @@ class UnlockDomainCommandTest extends CommandTestCase<UnlockDomainCommand> {
             new DeterministicStringGenerator(Alphabets.BASE_58),
             "adminreg",
             new CloudTasksHelper(fakeClock).getTestCloudTasksUtils());
+    command.printStream = System.out;
   }
 
   private Domain persistLockedDomain(String domainName, String registrarId) {
     Domain domain = persistResource(DatabaseHelper.newDomain(domainName));
     RegistryLock lock =
         command.domainLockUtils.saveNewRegistryLockRequest(domainName, registrarId, null, true);
-    command.domainLockUtils.verifyAndApplyLock(lock.getVerificationCode(), true);
+    command.domainLockUtils.verifyVerificationCode(lock.getVerificationCode(), true);
     return reloadResource(domain);
   }
 

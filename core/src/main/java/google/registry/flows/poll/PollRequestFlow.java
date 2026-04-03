@@ -25,15 +25,17 @@ import static google.registry.persistence.transaction.TransactionManagerFactory.
 import google.registry.flows.EppException;
 import google.registry.flows.EppException.ParameterValueSyntaxErrorException;
 import google.registry.flows.ExtensionManager;
-import google.registry.flows.Flow;
 import google.registry.flows.FlowModule.PollMessageId;
 import google.registry.flows.FlowModule.RegistrarId;
+import google.registry.flows.TransactionalFlow;
 import google.registry.model.eppoutput.EppResponse;
 import google.registry.model.poll.MessageQueueInfo;
 import google.registry.model.poll.PollMessage;
 import google.registry.model.poll.PollMessageExternalKeyConverter;
+import google.registry.persistence.IsolationLevel;
+import google.registry.persistence.PersistenceModule.TransactionIsolationLevel;
+import jakarta.inject.Inject;
 import java.util.Optional;
-import javax.inject.Inject;
 import org.joda.time.DateTime;
 
 /**
@@ -47,7 +49,8 @@ import org.joda.time.DateTime;
  *
  * @error {@link PollRequestFlow.UnexpectedMessageIdException}
  */
-public final class PollRequestFlow implements Flow {
+@IsolationLevel(value = TransactionIsolationLevel.TRANSACTION_READ_COMMITTED)
+public final class PollRequestFlow implements TransactionalFlow {
 
   @Inject ExtensionManager extensionManager;
   @Inject @RegistrarId String registrarId;
@@ -64,26 +67,23 @@ public final class PollRequestFlow implements Flow {
     }
 
     // Return the oldest message from the queue.
-    return tm().transact(
-            () -> {
-              DateTime now = tm().getTransactionTime();
-              Optional<PollMessage> maybePollMessage = getFirstPollMessage(registrarId, now);
-              if (!maybePollMessage.isPresent()) {
-                return responseBuilder.setResultFromCode(SUCCESS_WITH_NO_MESSAGES).build();
-              }
-              PollMessage pollMessage = maybePollMessage.get();
-              return responseBuilder
-                  .setResultFromCode(SUCCESS_WITH_ACK_MESSAGE)
-                  .setMessageQueueInfo(
-                      new MessageQueueInfo.Builder()
-                          .setQueueDate(pollMessage.getEventTime())
-                          .setMsg(pollMessage.getMsg())
-                          .setQueueLength(getPollMessageCount(registrarId, now))
-                          .setMessageId(makePollMessageExternalId(pollMessage))
-                          .build())
-                  .setMultipleResData(pollMessage.getResponseData())
-                  .build();
-            });
+    DateTime now = tm().getTransactionTime();
+    Optional<PollMessage> maybePollMessage = getFirstPollMessage(registrarId, now);
+    if (maybePollMessage.isEmpty()) {
+      return responseBuilder.setResultFromCode(SUCCESS_WITH_NO_MESSAGES).build();
+    }
+    PollMessage pollMessage = maybePollMessage.get();
+    return responseBuilder
+        .setResultFromCode(SUCCESS_WITH_ACK_MESSAGE)
+        .setMessageQueueInfo(
+            new MessageQueueInfo.Builder()
+                .setQueueDate(pollMessage.getEventTime())
+                .setMsg(pollMessage.getMsg())
+                .setQueueLength(getPollMessageCount(registrarId, now))
+                .setMessageId(makePollMessageExternalId(pollMessage))
+                .build())
+        .setMultipleResData(pollMessage.getResponseData())
+        .build();
   }
 
   /** Unexpected message id. */

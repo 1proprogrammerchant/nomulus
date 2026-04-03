@@ -15,7 +15,6 @@
 package google.registry.tools;
 
 import static com.google.common.truth.Truth.assertThat;
-import static google.registry.model.EppResourceUtils.loadByForeignKey;
 import static google.registry.model.eppcommon.StatusValue.PENDING_DELETE;
 import static google.registry.model.eppcommon.StatusValue.PENDING_TRANSFER;
 import static google.registry.model.reporting.HistoryEntry.Type.SYNTHETIC;
@@ -25,7 +24,6 @@ import static google.registry.testing.DatabaseHelper.createTld;
 import static google.registry.testing.DatabaseHelper.getOnlyHistoryEntryOfType;
 import static google.registry.testing.DatabaseHelper.getPollMessages;
 import static google.registry.testing.DatabaseHelper.loadByKey;
-import static google.registry.testing.DatabaseHelper.persistActiveContact;
 import static google.registry.testing.DatabaseHelper.persistActiveDomain;
 import static google.registry.testing.DatabaseHelper.persistDeletedDomain;
 import static google.registry.testing.DatabaseHelper.persistDomainWithDependentResources;
@@ -34,10 +32,10 @@ import static google.registry.testing.HistoryEntrySubject.assertAboutHistoryEntr
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.google.common.collect.ImmutableSet;
+import google.registry.model.ForeignKeyUtils;
 import google.registry.model.billing.BillingBase.Flag;
 import google.registry.model.billing.BillingBase.Reason;
 import google.registry.model.billing.BillingRecurrence;
-import google.registry.model.contact.Contact;
 import google.registry.model.domain.Domain;
 import google.registry.model.domain.DomainHistory;
 import google.registry.model.eppcommon.StatusValue;
@@ -55,16 +53,15 @@ public class UnrenewDomainCommandTest extends CommandTestCase<UnrenewDomainComma
     createTld("tld");
     fakeClock.setTo(DateTime.parse("2016-12-06T13:55:01Z"));
     command.clock = fakeClock;
+    command.printStream = System.out;
   }
 
   @Test
   void test_unrenewTwoDomains_worksSuccessfully() throws Exception {
-    Contact contact = persistActiveContact("jd1234");
     fakeClock.advanceOneMilli();
     persistDomainWithDependentResources(
         "foo",
         "tld",
-        contact,
         fakeClock.nowUtc(),
         fakeClock.nowUtc(),
         fakeClock.nowUtc().plusYears(5));
@@ -72,7 +69,6 @@ public class UnrenewDomainCommandTest extends CommandTestCase<UnrenewDomainComma
     persistDomainWithDependentResources(
         "bar",
         "tld",
-        contact,
         fakeClock.nowUtc(),
         fakeClock.nowUtc(),
         fakeClock.nowUtc().plusYears(4));
@@ -80,26 +76,24 @@ public class UnrenewDomainCommandTest extends CommandTestCase<UnrenewDomainComma
     runCommandForced("-p", "2", "foo.tld", "bar.tld");
     fakeClock.disableAutoIncrement();
     assertThat(
-            loadByForeignKey(Domain.class, "foo.tld", fakeClock.nowUtc())
+            ForeignKeyUtils.loadResource(Domain.class, "foo.tld", fakeClock.nowUtc())
                 .get()
-                .getRegistrationExpirationTime())
+                .getRegistrationExpirationDateTime())
         .isEqualTo(DateTime.parse("2019-12-06T13:55:01.001Z"));
     assertThat(
-            loadByForeignKey(Domain.class, "bar.tld", fakeClock.nowUtc())
+            ForeignKeyUtils.loadResource(Domain.class, "bar.tld", fakeClock.nowUtc())
                 .get()
-                .getRegistrationExpirationTime())
+                .getRegistrationExpirationDateTime())
         .isEqualTo(DateTime.parse("2018-12-06T13:55:01.002Z"));
     assertInStdout("Successfully unrenewed all domains.");
   }
 
   @Test
   void test_unrenewDomain_savesDependentEntitiesCorrectly() throws Exception {
-    Contact contact = persistActiveContact("jd1234");
     fakeClock.advanceOneMilli();
     persistDomainWithDependentResources(
         "foo",
         "tld",
-        contact,
         fakeClock.nowUtc(),
         fakeClock.nowUtc(),
         fakeClock.nowUtc().plusYears(5));
@@ -108,7 +102,7 @@ public class UnrenewDomainCommandTest extends CommandTestCase<UnrenewDomainComma
     runCommandForced("-p", "2", "foo.tld");
     DateTime unrenewTime = fakeClock.nowUtc();
     fakeClock.advanceOneMilli();
-    Domain domain = loadByForeignKey(Domain.class, "foo.tld", fakeClock.nowUtc()).get();
+    Domain domain = ForeignKeyUtils.loadResource(Domain.class, "foo.tld", fakeClock.nowUtc()).get();
 
     assertAboutHistoryEntries()
         .that(getOnlyHistoryEntryOfType(domain, SYNTHETIC))
@@ -155,8 +149,8 @@ public class UnrenewDomainCommandTest extends CommandTestCase<UnrenewDomainComma
                 .build()));
 
     // Check that fields on domain were updated correctly.
-    assertThat(domain.getRegistrationExpirationTime()).isEqualTo(newExpirationTime);
-    assertThat(domain.getLastEppUpdateTime()).isEqualTo(unrenewTime);
+    assertThat(domain.getRegistrationExpirationDateTime()).isEqualTo(newExpirationTime);
+    assertThat(domain.getLastEppUpdateDateTime()).isEqualTo(unrenewTime);
     assertThat(domain.getLastEppUpdateRegistrarId()).isEqualTo("TheRegistrar");
   }
 
@@ -178,6 +172,7 @@ public class UnrenewDomainCommandTest extends CommandTestCase<UnrenewDomainComma
 
   @Test
   void test_varietyOfInvalidDomains_displaysErrors() {
+    command.errorPrintStream = System.err;
     DateTime now = fakeClock.nowUtc();
     persistResource(
         DatabaseHelper.newDomain("deleting.tld")

@@ -24,8 +24,8 @@ import com.google.common.collect.Multimap;
 import com.google.common.flogger.FluentLogger;
 import google.registry.model.EppResource;
 import google.registry.persistence.VKey;
-import google.registry.request.Action.Service;
-import javax.inject.Inject;
+import google.registry.request.Action;
+import jakarta.inject.Inject;
 import org.joda.time.DateTime;
 import org.joda.time.Duration;
 
@@ -78,7 +78,7 @@ public final class AsyncTaskEnqueuer {
     logger.atInfo().log("Enqueuing async re-save of %s to run at %s.", entityKey, whenToResave);
     cloudTasksUtils.enqueue(
         QUEUE_ASYNC_ACTIONS,
-        cloudTasksUtils.createPostTaskWithDelay(
-            ResaveEntityAction.PATH, Service.BACKEND, params, etaDuration));
+        cloudTasksUtils.createTaskWithDelay(
+            ResaveEntityAction.class, Action.Method.POST, params, etaDuration));
   }
 }

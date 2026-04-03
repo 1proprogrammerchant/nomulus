@@ -18,15 +18,15 @@ import static google.registry.util.CollectionUtils.forceEmptyToNull;
 
 import com.google.common.base.Ascii;
 import com.google.common.collect.ImmutableList;
-import google.registry.model.Buildable.GenericBuilder;
+import google.registry.model.Buildable;
 import google.registry.model.ImmutableObject;
 import google.registry.model.domain.Period;
 import google.registry.model.domain.fee.Fee;
 import google.registry.model.domain.fee.FeeQueryCommandExtensionItem.CommandName;
+import jakarta.xml.bind.annotation.XmlAttribute;
+import jakarta.xml.bind.annotation.XmlElement;
+import jakarta.xml.bind.annotation.XmlType;
 import java.util.List;
-import javax.xml.bind.annotation.XmlAttribute;
-import javax.xml.bind.annotation.XmlElement;
-import javax.xml.bind.annotation.XmlType;
 import org.joda.time.DateTime;
 
 /** The version 0.12 response command entity for a domain check on a single resource. */
@@ -77,8 +77,7 @@ public class FeeCheckResponseExtensionItemCommandV12 extends ImmutableObject {
   }
 
   /** Builder for {@link FeeCheckResponseExtensionItemCommandV12}. */
-  public static class Builder
-      extends GenericBuilder<FeeCheckResponseExtensionItemCommandV12, Builder> {
+  public static class Builder extends Buildable.Builder<FeeCheckResponseExtensionItemCommandV12> {
 
     public Builder setCommandName(CommandName commandName) {
       getInstance().commandName = Ascii.toLowerCase(commandName.name());

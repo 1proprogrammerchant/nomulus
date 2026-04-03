@@ -15,16 +15,18 @@
 package google.registry.flows.domain;
 
 import static google.registry.flows.FlowUtils.validateRegistrarIsLoggedIn;
+import static google.registry.flows.ResourceFlowUtils.computeExDateForApprovalTime;
 import static google.registry.flows.ResourceFlowUtils.loadAndVerifyExistence;
 import static google.registry.flows.ResourceFlowUtils.verifyOptionalAuthInfo;
 import static google.registry.flows.domain.DomainTransferUtils.createTransferResponse;
+import static google.registry.util.DateTimeUtils.toDateTime;
+import static google.registry.util.DateTimeUtils.toInstant;
 
 import google.registry.flows.EppException;
 import google.registry.flows.ExtensionManager;
-import google.registry.flows.Flow;
 import google.registry.flows.FlowModule.RegistrarId;
 import google.registry.flows.FlowModule.TargetId;
-import google.registry.flows.ResourceFlowUtils;
+import google.registry.flows.TransactionalFlow;
 import google.registry.flows.annotations.ReportingSpec;
 import google.registry.flows.exceptions.NoTransferHistoryToQueryException;
 import google.registry.flows.exceptions.NotAuthorizedToViewTransferException;
@@ -35,8 +37,8 @@ import google.registry.model.reporting.IcannReportingTypes.ActivityReportField;
 import google.registry.model.transfer.DomainTransferData;
 import google.registry.model.transfer.TransferStatus;
 import google.registry.util.Clock;
+import jakarta.inject.Inject;
 import java.util.Optional;
-import javax.inject.Inject;
 import org.joda.time.DateTime;
 
 /**
@@ -56,7 +58,7 @@ import org.joda.time.DateTime;
  * @error {@link google.registry.flows.exceptions.NotAuthorizedToViewTransferException}
  */
 @ReportingSpec(ActivityReportField.DOMAIN_TRANSFER_QUERY)
-public final class DomainTransferQueryFlow implements Flow {
+public final class DomainTransferQueryFlow implements TransactionalFlow {
 
   @Inject ExtensionManager extensionManager;
   @Inject Optional<AuthInfo> authInfo;
@@ -81,18 +83,19 @@ public final class DomainTransferQueryFlow implements Flow {
     }
     // Note that the authorization info on the command (if present) has already been verified. If
     // it's present, then the other checks are unnecessary.
-    if (!authInfo.isPresent()
+    if (authInfo.isEmpty()
         && !registrarId.equals(transferData.getGainingRegistrarId())
         && !registrarId.equals(transferData.getLosingRegistrarId())) {
       throw new NotAuthorizedToViewTransferException();
     }
     DateTime newExpirationTime = null;
     if (transferData.getTransferStatus().isApproved()) {
-      newExpirationTime = transferData.getTransferredRegistrationExpirationTime();
+      newExpirationTime = transferData.getTransferredRegistrationExpirationDateTime();
     } else if (transferData.getTransferStatus().equals(TransferStatus.PENDING)) {
       newExpirationTime =
-          ResourceFlowUtils.computeExDateForApprovalTime(
-              domain, now, domain.getTransferData().getTransferPeriod());
+          toDateTime(
+              computeExDateForApprovalTime(
+                  domain, toInstant(now), domain.getTransferData().getTransferPeriod()));
     }
     return responseBuilder
         .setResData(createTransferResponse(targetId, transferData, newExpirationTime))

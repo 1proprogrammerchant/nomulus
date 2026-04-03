@@ -22,6 +22,7 @@ import static google.registry.xml.XmlTransformer.loadXmlSchemas;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
+import jakarta.inject.Inject;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -33,7 +34,6 @@ import java.security.cert.X509Certificate;
 import java.util.List;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
-import javax.inject.Inject;
 import javax.xml.crypto.AlgorithmMethod;
 import javax.xml.crypto.KeySelector;
 import javax.xml.crypto.KeySelectorException;
@@ -111,6 +111,10 @@ public class TmchXmlSignature {
     dbf.setSchema(SCHEMA);
     dbf.setAttribute("http://apache.org/xml/features/validation/schema/normalized-value", false);
     dbf.setNamespaceAware(true);
+    // Disable DTDs
+    dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+    dbf.setXIncludeAware(false); // disable XML Inclusions
+    dbf.setExpandEntityReferences(false); // disable expand entity reference nodes
     return dbf.newDocumentBuilder().parse(input);
   }
 
@@ -154,11 +158,9 @@ public class TmchXmlSignature {
         return null;
       }
       for (Object keyInfoChild : keyInfo.getContent()) {
-        if (keyInfoChild instanceof X509Data) {
-          X509Data x509Data = (X509Data) keyInfoChild;
+        if (keyInfoChild instanceof X509Data x509Data) {
           for (Object x509DataChild : x509Data.getContent()) {
-            if (x509DataChild instanceof X509Certificate) {
-              X509Certificate cert = (X509Certificate) x509DataChild;
+            if (x509DataChild instanceof X509Certificate cert) {
               try {
                 tmchCertificateAuthority.verify(cert);
               } catch (SignatureException e) {

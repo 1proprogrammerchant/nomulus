@@ -15,25 +15,20 @@
 package google.registry.reporting.billing;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.common.truth.Truth8.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
-import com.google.cloud.storage.BlobId;
 import com.google.common.collect.ImmutableList;
 import com.google.common.net.MediaType;
 import google.registry.gcs.GcsUtils;
+import google.registry.groups.GmailClient;
 import google.registry.util.EmailMessage;
-import google.registry.util.EmailMessage.Attachment;
-import google.registry.util.SendEmailService;
-import java.io.ByteArrayInputStream;
-import java.nio.charset.StandardCharsets;
-import javax.mail.MessagingException;
-import javax.mail.internet.InternetAddress;
+import jakarta.mail.MessagingException;
+import jakarta.mail.internet.InternetAddress;
+import java.util.Optional;
 import org.joda.time.YearMonth;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -42,63 +37,71 @@ import org.mockito.ArgumentCaptor;
 /** Unit tests for {@link google.registry.reporting.billing.BillingEmailUtils}. */
 class BillingEmailUtilsTest {
 
-  private SendEmailService emailService;
+  private GmailClient gmailClient;
   private BillingEmailUtils emailUtils;
-  private GcsUtils gcsUtils;
   private ArgumentCaptor<EmailMessage> contentCaptor;
+  private GcsUtils gcsUtils;
 
   @BeforeEach
   void beforeEach() throws Exception {
-    emailService = mock(SendEmailService.class);
-    gcsUtils = mock(GcsUtils.class);
-    when(gcsUtils.openInputStream(BlobId.of("test-bucket", "results/REG-INV-2017-10.csv")))
-        .thenReturn(
-            new ByteArrayInputStream("test,data\nhello,world".getBytes(StandardCharsets.UTF_8)));
+    gmailClient = mock(GmailClient.class);
     contentCaptor = ArgumentCaptor.forClass(EmailMessage.class);
+    gcsUtils = mock(GcsUtils.class);
+    emailUtils = getEmailUtils(Optional.of(new InternetAddress("reply-to@test.com")));
+  }
 
-    emailUtils =
-        new BillingEmailUtils(
-            emailService,
-            new YearMonth(2017, 10),
-            new InternetAddress("my-sender@test.com"),
-            new InternetAddress("my-receiver@test.com"),
-            ImmutableList.of(
-                new InternetAddress("hello@world.com"), new InternetAddress("hola@mundo.com")),
-            "test-bucket",
-            "REG-INV",
-            "results/",
-            gcsUtils);
+  private BillingEmailUtils getEmailUtils(Optional<InternetAddress> replyToAddress)
+      throws Exception {
+    return new BillingEmailUtils(
+        gmailClient,
+        new YearMonth(2017, 10),
+        new InternetAddress("my-receiver@test.com"),
+        ImmutableList.of(
+            new InternetAddress("hello@world.com"), new InternetAddress("hola@mundo.com")),
+        replyToAddress,
+        "test-bucket",
+        "REG-INV",
+        "www.google.com/",
+        "results/",
+        gcsUtils);
   }
 
   @Test
   void testSuccess_emailOverallInvoice() throws MessagingException {
     emailUtils.emailOverallInvoice();
 
-    verify(emailService).sendEmail(contentCaptor.capture());
+    verify(gmailClient).sendEmail(contentCaptor.capture());
     EmailMessage emailMessage = contentCaptor.getValue();
     EmailMessage expectedContent =
         EmailMessage.newBuilder()
-            .setFrom(new InternetAddress("my-sender@test.com"))
             .setRecipients(
                 ImmutableList.of(
                     new InternetAddress("hello@world.com"), new InternetAddress("hola@mundo.com")))
             .setSubject("Domain Registry invoice data 2017-10")
-            .setBody("Attached is the 2017-10 invoice for the domain registry.")
-            .setAttachment(
-                Attachment.newBuilder()
-                    .setContent("test,data\nhello,world")
-                    .setContentType(MediaType.CSV_UTF_8)
-                    .setFilename("REG-INV-2017-10.csv")
-                    .build())
+            .setBody(
+                "<p>Use the following link to download 2017-10 invoice for the domain registry -"
+                    + " <a href=\"www.google.com/results/REG-INV-2017-10.csv\">invoice</a>.</p>")
+            .setReplyToEmailAddress(new InternetAddress("reply-to@test.com"))
+            .setContentType(MediaType.HTML_UTF_8)
             .build();
     assertThat(emailMessage).isEqualTo(expectedContent);
+  }
+
+  @Test
+  void testSuccess_emailOverallInvoiceNoReplyOverride() throws Exception {
+    emailUtils = getEmailUtils(Optional.empty());
+    emailUtils.emailOverallInvoice();
+
+    verify(gmailClient).sendEmail(contentCaptor.capture());
+    EmailMessage emailMessage = contentCaptor.getValue();
+    assertThat(emailMessage.replyToEmailAddress()).isEmpty();
   }
 
   @Test
   void testFailure_emailsAlert() throws MessagingException {
     doThrow(new RuntimeException(new MessagingException("expected")))
         .doNothing()
-        .when(emailService)
+        .when(gmailClient)
         .sendEmail(contentCaptor.capture());
     RuntimeException thrown =
         assertThrows(RuntimeException.class, () -> emailUtils.emailOverallInvoice());
@@ -106,22 +109,21 @@ class BillingEmailUtilsTest {
     assertThat(thrown)
         .hasCauseThat()
         .hasMessageThat()
-        .isEqualTo("javax.mail.MessagingException: expected");
+        .isEqualTo("jakarta.mail.MessagingException: expected");
     // Verify we sent an e-mail alert
-    verify(emailService, times(2)).sendEmail(contentCaptor.capture());
+    verify(gmailClient, times(2)).sendEmail(contentCaptor.capture());
     validateAlertMessage(contentCaptor.getValue(), "Emailing invoice failed due to expected");
   }
 
   @Test
   void testSuccess_sendAlertEmail() throws MessagingException {
     emailUtils.sendAlertEmail("Alert!");
-    verify(emailService).sendEmail(contentCaptor.capture());
+    verify(gmailClient).sendEmail(contentCaptor.capture());
     validateAlertMessage(contentCaptor.getValue(), "Alert!");
   }
 
   private void validateAlertMessage(EmailMessage emailMessage, String body)
       throws MessagingException {
-    assertThat(emailMessage.from()).isEqualTo(new InternetAddress("my-sender@test.com"));
     assertThat(emailMessage.recipients())
         .containsExactly(new InternetAddress("my-receiver@test.com"));
     assertThat(emailMessage.subject()).isEqualTo("Billing Pipeline Alert: 2017-10");

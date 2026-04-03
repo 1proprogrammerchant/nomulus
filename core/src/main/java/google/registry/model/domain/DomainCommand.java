@@ -16,23 +16,20 @@ package google.registry.model.domain;
 
 import static com.google.common.base.MoreObjects.firstNonNull;
 import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.collect.Sets.difference;
 import static google.registry.util.CollectionUtils.difference;
-import static google.registry.util.CollectionUtils.forceEmptyToNull;
+import static google.registry.util.CollectionUtils.isNullOrEmpty;
 import static google.registry.util.CollectionUtils.nullSafeImmutableCopy;
-import static google.registry.util.CollectionUtils.nullToEmpty;
 import static google.registry.util.CollectionUtils.nullToEmptyImmutableCopy;
-import static google.registry.util.CollectionUtils.union;
 
 import com.google.common.base.MoreObjects;
-import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import google.registry.model.EppResource;
+import google.registry.flows.EppException.ParameterValuePolicyErrorException;
+import google.registry.flows.domain.DomainFlowUtils.RegistrantProhibitedException;
+import google.registry.flows.exceptions.ContactsProhibitedException;
 import google.registry.model.ForeignKeyUtils;
 import google.registry.model.ImmutableObject;
-import google.registry.model.contact.Contact;
 import google.registry.model.eppinput.ResourceCommand.AbstractSingleResourceCommand;
 import google.registry.model.eppinput.ResourceCommand.ResourceCheck;
 import google.registry.model.eppinput.ResourceCommand.ResourceCreateOrChange;
@@ -40,16 +37,17 @@ import google.registry.model.eppinput.ResourceCommand.ResourceUpdate;
 import google.registry.model.eppinput.ResourceCommand.SingleResourceCommand;
 import google.registry.model.host.Host;
 import google.registry.persistence.VKey;
+import jakarta.xml.bind.annotation.XmlAttribute;
+import jakarta.xml.bind.annotation.XmlElement;
+import jakarta.xml.bind.annotation.XmlElementWrapper;
+import jakarta.xml.bind.annotation.XmlEnumValue;
+import jakarta.xml.bind.annotation.XmlRootElement;
+import jakarta.xml.bind.annotation.XmlTransient;
+import jakarta.xml.bind.annotation.XmlType;
+import jakarta.xml.bind.annotation.XmlValue;
+import java.util.Optional;
 import java.util.Set;
 import javax.annotation.Nullable;
-import javax.xml.bind.annotation.XmlAttribute;
-import javax.xml.bind.annotation.XmlElement;
-import javax.xml.bind.annotation.XmlElementWrapper;
-import javax.xml.bind.annotation.XmlEnumValue;
-import javax.xml.bind.annotation.XmlRootElement;
-import javax.xml.bind.annotation.XmlTransient;
-import javax.xml.bind.annotation.XmlType;
-import javax.xml.bind.annotation.XmlValue;
 import org.joda.time.DateTime;
 import org.joda.time.LocalDate;
 
@@ -66,7 +64,8 @@ public class DomainCommand {
    */
   public interface CreateOrUpdate<T extends CreateOrUpdate<T>> extends SingleResourceCommand {
     /** Creates a copy of this command with hard links to hosts and contacts. */
-    T cloneAndLinkReferences(DateTime now) throws InvalidReferencesException;
+    T cloneAndLinkReferences(DateTime now)
+        throws InvalidReferencesException, ParameterValuePolicyErrorException;
   }
 
   /** The fields on "chgType" from <a href="http://tools.ietf.org/html/rfc5731">RFC5731</a>. */
@@ -76,21 +75,14 @@ public class DomainCommand {
 
     /** The contactId of the registrant who registered this domain. */
     @XmlElement(name = "registrant")
+    @Nullable
     String registrantContactId;
-
-    /** A resolved key to the registrant who registered this domain. */
-    @XmlTransient VKey<Contact> registrant;
 
     /** Authorization info (aka transfer secret) of the domain. */
     DomainAuthInfo authInfo;
 
-    public String getRegistrantContactId() {
-      return registrantContactId;
-    }
-
-    @Nullable
-    public VKey<Contact> getRegistrant() {
-      return registrant;
+    public Optional<String> getRegistrantContactId() {
+      return Optional.ofNullable(registrantContactId);
     }
 
     public DomainAuthInfo getAuthInfo() {
@@ -131,10 +123,6 @@ public class DomainCommand {
     @XmlElement(name = "contact")
     Set<ForeignKeyedDesignatedContact> foreignKeyedDesignatedContacts;
 
-    /** Resolved keys to associated contacts for the domain (other than registrant). */
-    @XmlTransient
-    Set<DesignatedContact> contacts;
-
     /** The period that this domain's state was set to last for (e.g. 1-10 years). */
     Period period;
 
@@ -159,10 +147,6 @@ public class DomainCommand {
       return nullToEmptyImmutableCopy(nameservers);
     }
 
-    public ImmutableSet<DesignatedContact> getContacts() {
-      return nullToEmptyImmutableCopy(contacts);
-    }
-
     @Override
     public DomainAuthInfo getAuthInfo() {
       return authInfo;
@@ -170,26 +154,15 @@ public class DomainCommand {
 
     /** Creates a copy of this {@link Create} with hard links to hosts and contacts. */
     @Override
-    public Create cloneAndLinkReferences(DateTime now) throws InvalidReferencesException {
+    public Create cloneAndLinkReferences(DateTime now)
+        throws InvalidReferencesException, ParameterValuePolicyErrorException {
       Create clone = clone(this);
       clone.nameservers = linkHosts(clone.nameserverHostNames, now);
-      if (registrantContactId == null) {
-        clone.contacts = linkContacts(clone.foreignKeyedDesignatedContacts, now);
-      } else {
-        // Load the registrant and contacts in one shot.
-        ForeignKeyedDesignatedContact registrantPlaceholder = new ForeignKeyedDesignatedContact();
-        registrantPlaceholder.contactId = clone.registrantContactId;
-        registrantPlaceholder.type = DesignatedContact.Type.REGISTRANT;
-        Set<DesignatedContact> contacts = linkContacts(
-            union(nullToEmpty(clone.foreignKeyedDesignatedContacts), registrantPlaceholder),
-            now);
-        for (DesignatedContact contact : contacts) {
-          if (DesignatedContact.Type.REGISTRANT.equals(contact.getType())) {
-            clone.registrant = contact.getContactKey();
-            clone.contacts = forceEmptyToNull(difference(contacts, contact));
-            break;
-          }
-        }
+      if (registrantContactId != null) {
+        throw new RegistrantProhibitedException();
+      }
+      if (!isNullOrEmpty(foreignKeyedDesignatedContacts)) {
+        throw new ContactsProhibitedException();
       }
       return clone;
     }
@@ -351,10 +324,6 @@ public class DomainCommand {
       @XmlElement(name = "contact")
       Set<ForeignKeyedDesignatedContact> foreignKeyedDesignatedContacts;
 
-      /** Resolved keys to associated contacts for the domain (other than registrant). */
-      @XmlTransient
-      Set<DesignatedContact> contacts;
-
       public ImmutableSet<String> getNameserverHostNames() {
         return nullSafeImmutableCopy(nameserverHostNames);
       }
@@ -363,15 +332,14 @@ public class DomainCommand {
         return nullToEmptyImmutableCopy(nameservers);
       }
 
-      public ImmutableSet<DesignatedContact> getContacts() {
-        return nullToEmptyImmutableCopy(contacts);
-      }
-
       /** Creates a copy of this {@link AddRemove} with hard links to hosts and contacts. */
-      private AddRemove cloneAndLinkReferences(DateTime now) throws InvalidReferencesException {
+      private AddRemove cloneAndLinkReferences(DateTime now)
+          throws InvalidReferencesException, ContactsProhibitedException {
         AddRemove clone = clone(this);
         clone.nameservers = linkHosts(clone.nameserverHostNames, now);
-        clone.contacts = linkContacts(clone.foreignKeyedDesignatedContacts, now);
+        if (!isNullOrEmpty(foreignKeyedDesignatedContacts)) {
+          throw new ContactsProhibitedException();
+        }
         return clone;
       }
     }
@@ -379,16 +347,11 @@ public class DomainCommand {
     /** The inner change type on a domain update command. */
     @XmlType(propOrder = {"registrantContactId", "authInfo"})
     public static class Change extends DomainCreateOrChange<Domain.Builder> {
-      /** Creates a copy of this {@link Change} with hard links to hosts and contacts. */
-      Change cloneAndLinkReferences(DateTime now) throws InvalidReferencesException {
+      Change cloneAndLinkReferences() throws RegistrantProhibitedException {
         Change clone = clone(this);
-        clone.registrant =
-            Strings.isNullOrEmpty(clone.registrantContactId)
-                ? null
-                : getOnlyElement(
-                    loadByForeignKeysCached(
-                            ImmutableSet.of(clone.registrantContactId), Contact.class, now)
-                        .values());
+        if (clone.registrantContactId != null) {
+          throw new RegistrantProhibitedException();
+        }
         return clone;
       }
     }
@@ -400,11 +363,12 @@ public class DomainCommand {
      * of those classes, which is harmless because the getters do that anyways.
      */
     @Override
-    public Update cloneAndLinkReferences(DateTime now) throws InvalidReferencesException {
+    public Update cloneAndLinkReferences(DateTime now)
+        throws InvalidReferencesException, ParameterValuePolicyErrorException {
       Update clone = clone(this);
       clone.innerAdd = clone.getInnerAdd().cloneAndLinkReferences(now);
       clone.innerRemove = clone.getInnerRemove().cloneAndLinkReferences(now);
-      clone.innerChange = clone.getInnerChange().cloneAndLinkReferences(now);
+      clone.innerChange = clone.getInnerChange().cloneAndLinkReferences();
       return clone;
     }
   }
@@ -414,36 +378,17 @@ public class DomainCommand {
     if (hostNames == null) {
       return null;
     }
-    return ImmutableSet.copyOf(loadByForeignKeysCached(hostNames, Host.class, now).values());
+    return ImmutableSet.copyOf(loadByForeignKeysCached(hostNames, now).values());
   }
 
-  private static Set<DesignatedContact> linkContacts(
-      Set<ForeignKeyedDesignatedContact> contacts, DateTime now) throws InvalidReferencesException {
-    if (contacts == null) {
-      return null;
-    }
-    ImmutableSet.Builder<String> foreignKeys = new ImmutableSet.Builder<>();
-    for (ForeignKeyedDesignatedContact contact : contacts) {
-      foreignKeys.add(contact.contactId);
-    }
-    ImmutableMap<String, VKey<Contact>> loadedContacts =
-        loadByForeignKeysCached(foreignKeys.build(), Contact.class, now);
-    ImmutableSet.Builder<DesignatedContact> linkedContacts = new ImmutableSet.Builder<>();
-    for (ForeignKeyedDesignatedContact contact : contacts) {
-      linkedContacts.add(
-          DesignatedContact.create(contact.type, loadedContacts.get(contact.contactId)));
-    }
-    return linkedContacts.build();
-  }
-
-  /** Loads keys to cached EPP resources by their foreign keys. */
-  private static <T extends EppResource> ImmutableMap<String, VKey<T>> loadByForeignKeysCached(
-      final Set<String> foreignKeys, final Class<T> clazz, final DateTime now)
-      throws InvalidReferencesException {
-    ImmutableMap<String, VKey<T>> fks = ForeignKeyUtils.loadCached(clazz, foreignKeys, now);
+  /** Loads host keys to cached EPP resources by their foreign keys. */
+  private static ImmutableMap<String, VKey<Host>> loadByForeignKeysCached(
+      final Set<String> foreignKeys, final DateTime now) throws InvalidReferencesException {
+    ImmutableMap<String, VKey<Host>> fks =
+        ForeignKeyUtils.loadKeysByCacheIfEnabled(Host.class, foreignKeys, now);
     if (!fks.keySet().equals(foreignKeys)) {
       throw new InvalidReferencesException(
-          clazz, ImmutableSet.copyOf(difference(foreignKeys, fks.keySet())));
+          Host.class, ImmutableSet.copyOf(difference(foreignKeys, fks.keySet())));
     }
     return fks;
   }

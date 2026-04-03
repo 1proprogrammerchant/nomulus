@@ -14,7 +14,7 @@
 
 package google.registry.rdap;
 
-import com.google.auto.value.AutoValue;
+import com.google.auto.value.AutoBuilder;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableSet;
 import com.google.monitoring.metrics.DistributionFitter;
@@ -25,8 +25,8 @@ import com.google.monitoring.metrics.LabelDescriptor;
 import com.google.monitoring.metrics.MetricRegistryImpl;
 import google.registry.rdap.RdapSearchResults.IncompletenessWarningType;
 import google.registry.request.Action;
+import jakarta.inject.Inject;
 import java.util.Optional;
-import javax.inject.Inject;
 
 /** RDAP Instrumentation. */
 public class RdapMetrics {
@@ -102,10 +102,7 @@ public class RdapMetrics {
   static final IncrementableMetric requests =
       MetricRegistryImpl.getDefault()
           .newIncrementableMetric(
-              "/rdap/requests",
-              "Count of RDAP Requests",
-              "count",
-              LABEL_DESCRIPTORS_FOR_REQUESTS);
+              "/rdap/requests", "Count of RDAP Requests", "count", LABEL_DESCRIPTORS_FOR_REQUESTS);
 
   @VisibleForTesting
   static final IncrementableMetric responses =
@@ -136,16 +133,6 @@ public class RdapMetrics {
               LABEL_DESCRIPTORS_FOR_RETRIEVAL_COUNTS,
               FIBONACCI_FITTER);
 
-  @VisibleForTesting
-  static final EventMetric numberOfContactsRetrieved =
-      MetricRegistryImpl.getDefault()
-          .newEventMetric(
-              "/rdap/num_contacts_retrieved",
-              "Number of contacts retrieved",
-              "count",
-              LABEL_DESCRIPTORS_FOR_RETRIEVAL_COUNTS,
-              FIBONACCI_FITTER);
-
   @Inject
   public RdapMetrics() {}
 
@@ -163,8 +150,7 @@ public class RdapMetrics {
    * ways of looking at the data, since cardinality constraints prevent us from saving all the
    * information in a single metric.
    */
-  public void updateMetrics(
-      RdapMetricInformation rdapMetricInformation) {
+  public void updateMetrics(RdapMetricInformation rdapMetricInformation) {
     requests.increment(
         rdapMetricInformation.endpointType().toString(),
         rdapMetricInformation.includeDeleted() ? "YES" : "NO",
@@ -195,106 +181,73 @@ public class RdapMetrics {
           getLabelStringForPrefixLength(rdapMetricInformation.prefixLength()),
           rdapMetricInformation.includeDeleted() ? "YES" : "NO");
     }
-    if (rdapMetricInformation.numContactsRetrieved().isPresent()) {
-      numberOfContactsRetrieved.record(
-          rdapMetricInformation.numContactsRetrieved().get(),
-          rdapMetricInformation.endpointType().toString(),
-          rdapMetricInformation.searchType().toString(),
-          rdapMetricInformation.wildcardType().toString(),
-          getLabelStringForPrefixLength(rdapMetricInformation.prefixLength()),
-          rdapMetricInformation.includeDeleted() ? "YES" : "NO");
-    }
   }
 
-  @AutoValue
-  abstract static class RdapMetricInformation {
+  /**
+   * Information on RDAP metrics.
+   *
+   * @param endpointType The type of RDAP endpoint (domain, domains, nameserver, etc.).
+   * @param searchType The search type (by domain name, by nameserver name, etc.).
+   * @param wildcardType The type of wildcarding requested (prefix, suffix, etc.).
+   * @param prefixLength The length of the prefix string before the wildcard, if any; any length
+   *     longer than MAX_RECORDED_PREFIX_LENGTH is limited to MAX_RECORDED_PREFIX_LENGTH when
+   *     recording the metric, to avoid cardinality problems.
+   * @param includeDeleted Whether the search included deleted records.
+   * @param registrarSpecified Whether the search requested a specific registrar.
+   * @param role Type of authentication/authorization: public, admin or registrar.
+   * @param requestMethod Http request method (GET, POST, HEAD, etc.).
+   * @param statusCode Http status code.
+   * @param incompletenessWarningType Incompleteness warning type (e.g. truncated).
+   * @param numDomainsRetrieved Number of domains retrieved from the database; this might be more
+   *     than were actually returned in the response; absent if a search was not performed.
+   * @param numHostsRetrieved Number of hosts retrieved from the database; this might be more than
+   *     were actually returned in the response; absent if a search was not performed.
+   */
+  public record RdapMetricInformation(
+      EndpointType endpointType,
+      SearchType searchType,
+      WildcardType wildcardType,
+      int prefixLength,
+      boolean includeDeleted,
+      boolean registrarSpecified,
+      RdapAuthorization.Role role,
+      Action.Method requestMethod,
+      int statusCode,
+      IncompletenessWarningType incompletenessWarningType,
+      Optional<Long> numDomainsRetrieved,
+      Optional<Long> numHostsRetrieved) {
 
-    /** The type of RDAP endpoint (domain, domains, nameserver, etc.). */
-    abstract EndpointType endpointType();
+    @AutoBuilder
+    interface Builder {
+      Builder setEndpointType(EndpointType endpointType);
 
-    /** The search type (by domain name, by nameserver name, etc.). */
-    abstract SearchType searchType();
+      Builder setSearchType(SearchType searchType);
 
-    /** The type of wildcarding requested (prefix, suffix, etc.). */
-    abstract WildcardType wildcardType();
+      Builder setWildcardType(WildcardType wildcardType);
 
-    /**
-     * The length of the prefix string before the wildcard, if any; any length longer than
-     * MAX_RECORDED_PREFIX_LENGTH is limited to MAX_RECORDED_PREFIX_LENGTH when recording the
-     * metric, to avoid cardinality problems.
-     */
-    abstract int prefixLength();
+      Builder setPrefixLength(int prefixLength);
 
-    /** Whether the search included deleted records. */
-    abstract boolean includeDeleted();
+      Builder setIncludeDeleted(boolean includeDeleted);
 
-    /** Whether the search requested a specific registrar. */
-    abstract boolean registrarSpecified();
+      Builder setRegistrarSpecified(boolean registrarSpecified);
 
-    /** Type of authentication/authorization: public, admin or registrar. */
-    abstract RdapAuthorization.Role role();
+      Builder setRole(RdapAuthorization.Role role);
 
-    /** Http request method (GET, POST, HEAD, etc.). */
-    abstract Action.Method requestMethod();
+      Builder setRequestMethod(Action.Method requestMethod);
 
-    /** Http status code. */
-    abstract int statusCode();
+      Builder setStatusCode(int statusCode);
 
-    /** Incompleteness warning type (e.g. truncated). */
-    abstract IncompletenessWarningType incompletenessWarningType();
+      Builder setIncompletenessWarningType(IncompletenessWarningType incompletenessWarningType);
 
-    /**
-     * Number of domains retrieved from the database; this might be more than were actually returned
-     * in the response; absent if a search was not performed.
-     */
-    abstract Optional<Long> numDomainsRetrieved();
+      Builder setNumDomainsRetrieved(long numDomainsRetrieved);
 
-    /**
-     * Number of hosts retrieved from the database; this might be more than were actually returned
-     * in the response; absent if a search was not performed.
-     */
-    abstract Optional<Long> numHostsRetrieved();
+      Builder setNumHostsRetrieved(long numHostsRetrieved);
 
-    /**
-     * Number of contacts retrieved from the database; this might be more than were actually
-     * returned in the response; absent if a search was not performed.
-     */
-    abstract Optional<Long> numContactsRetrieved();
-
-    @AutoValue.Builder
-    abstract static class Builder {
-      abstract Builder setEndpointType(EndpointType endpointType);
-
-      abstract Builder setSearchType(SearchType searchType);
-
-      abstract Builder setWildcardType(WildcardType wildcardType);
-
-      abstract Builder setPrefixLength(int prefixLength);
-
-      abstract Builder setIncludeDeleted(boolean includeDeleted);
-
-      abstract Builder setRegistrarSpecified(boolean registrarSpecified);
-
-      abstract Builder setRole(RdapAuthorization.Role role);
-
-      abstract Builder setRequestMethod(Action.Method requestMethod);
-
-      abstract Builder setStatusCode(int statusCode);
-
-      abstract Builder setIncompletenessWarningType(
-          IncompletenessWarningType incompletenessWarningType);
-
-      abstract Builder setNumDomainsRetrieved(long numDomainsRetrieved);
-
-      abstract Builder setNumHostsRetrieved(long numHostsRetrieved);
-
-      abstract Builder setNumContactsRetrieved(long numContactRetrieved);
-
-      abstract RdapMetricInformation build();
+      RdapMetricInformation build();
     }
 
     static Builder builder() {
-      return new AutoValue_RdapMetrics_RdapMetricInformation.Builder()
+      return new AutoBuilder_RdapMetrics_RdapMetricInformation_Builder()
           .setSearchType(SearchType.NONE)
           .setWildcardType(WildcardType.INVALID)
           .setPrefixLength(0)

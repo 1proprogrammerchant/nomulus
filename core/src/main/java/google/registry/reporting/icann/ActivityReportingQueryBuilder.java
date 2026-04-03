@@ -21,8 +21,8 @@ import static google.registry.reporting.icann.QueryBuilderUtils.getTableName;
 import com.google.common.collect.ImmutableMap;
 import google.registry.config.RegistryConfig.Config;
 import google.registry.util.SqlTemplate;
-import javax.inject.Inject;
-import javax.inject.Named;
+import jakarta.inject.Inject;
+import jakarta.inject.Named;
 import org.joda.time.LocalDate;
 import org.joda.time.YearMonth;
 import org.joda.time.format.DateTimeFormat;
@@ -36,7 +36,7 @@ public final class ActivityReportingQueryBuilder implements QueryBuilder {
   static final String DNS_COUNTS = "dns_counts";
   static final String MONTHLY_LOGS = "monthly_logs";
   static final String EPP_METRICS = "epp_metrics";
-  static final String WHOIS_COUNTS = "whois_counts";
+  static final String RDAP_COUNTS = "rdap_counts";
   static final String ACTIVITY_REPORT_AGGREGATION = "activity_report_aggregation";
 
   private final String projectId;
@@ -70,51 +70,44 @@ public final class ActivityReportingQueryBuilder implements QueryBuilder {
 
     ImmutableMap.Builder<String, String> queriesBuilder = ImmutableMap.builder();
     String operationalRegistrarsQuery;
-      operationalRegistrarsQuery =
-          SqlTemplate.create(getQueryFromFile("cloud_sql_registrar_operating_status.sql"))
-              .put("PROJECT_ID", projectId)
-              .build();
+    operationalRegistrarsQuery =
+        SqlTemplate.create(getQueryFromFile(REGISTRAR_OPERATING_STATUS + ".sql"))
+            .put("PROJECT_ID", projectId)
+            .build();
     queriesBuilder.put(
         getTableName(REGISTRAR_OPERATING_STATUS, yearMonth), operationalRegistrarsQuery);
 
-    String dnsCountsQuery = dnsCountQueryCoordinator.createQuery(yearMonth);
+    String dnsCountsQuery = dnsCountQueryCoordinator.createQuery();
     queriesBuilder.put(getTableName(DNS_COUNTS, yearMonth), dnsCountsQuery);
 
     // Convert reportingMonth into YYYYMMDD format for Bigquery table partition pattern-matching.
     DateTimeFormatter logTableFormatter = DateTimeFormat.forPattern("yyyyMMdd");
-    // The monthly logs are a shared dependency for epp counts and whois metrics
     String monthlyLogsQuery =
-        SqlTemplate.create(getQueryFromFile("monthly_logs.sql"))
+        SqlTemplate.create(getQueryFromFile(MONTHLY_LOGS + ".sql"))
             .put("PROJECT_ID", projectId)
-            .put("APPENGINE_LOGS_DATA_SET", "appengine_logs")
-            .put("REQUEST_TABLE", "appengine_googleapis_com_request_log_")
             .put("FIRST_DAY_OF_MONTH", logTableFormatter.print(firstDayOfMonth))
             .put("LAST_DAY_OF_MONTH", logTableFormatter.print(lastDayOfMonth))
             .build();
     queriesBuilder.put(getTableName(MONTHLY_LOGS, yearMonth), monthlyLogsQuery);
 
     String eppQuery =
-        SqlTemplate.create(getQueryFromFile("epp_metrics.sql"))
+        SqlTemplate.create(getQueryFromFile(EPP_METRICS + ".sql"))
             .put("PROJECT_ID", projectId)
-            .put("ICANN_REPORTING_DATA_SET", icannReportingDataSet)
-            .put("MONTHLY_LOGS_TABLE", getTableName(MONTHLY_LOGS, yearMonth))
-            // All metadata logs for reporting come from google.registry.flows.FlowReporter.
-            .put(
-                "METADATA_LOG_PREFIX",
-                "google.registry.flows.FlowReporter recordToLogs: FLOW-LOG-SIGNATURE-METADATA")
+            .put("FIRST_DAY_OF_MONTH", logTableFormatter.print(firstDayOfMonth))
+            .put("LAST_DAY_OF_MONTH", logTableFormatter.print(lastDayOfMonth))
             .build();
     queriesBuilder.put(getTableName(EPP_METRICS, yearMonth), eppQuery);
 
-    String whoisQuery =
-        SqlTemplate.create(getQueryFromFile("whois_counts.sql"))
+    String rdapQuery =
+        SqlTemplate.create(getQueryFromFile(RDAP_COUNTS + ".sql"))
             .put("PROJECT_ID", projectId)
             .put("ICANN_REPORTING_DATA_SET", icannReportingDataSet)
             .put("MONTHLY_LOGS_TABLE", getTableName(MONTHLY_LOGS, yearMonth))
             .build();
-    queriesBuilder.put(getTableName(WHOIS_COUNTS, yearMonth), whoisQuery);
+    queriesBuilder.put(getTableName(RDAP_COUNTS, yearMonth), rdapQuery);
 
     SqlTemplate aggregateQuery =
-        SqlTemplate.create(getQueryFromFile("cloud_sql_activity_report_aggregation.sql"))
+        SqlTemplate.create(getQueryFromFile(ACTIVITY_REPORT_AGGREGATION + ".sql"))
             .put("PROJECT_ID", projectId)
             .put(
                 "REGISTRAR_OPERATING_STATUS_TABLE",
@@ -122,7 +115,7 @@ public final class ActivityReportingQueryBuilder implements QueryBuilder {
             .put("ICANN_REPORTING_DATA_SET", icannReportingDataSet)
             .put("DNS_COUNTS_TABLE", getTableName(DNS_COUNTS, yearMonth))
             .put("EPP_METRICS_TABLE", getTableName(EPP_METRICS, yearMonth))
-            .put("WHOIS_COUNTS_TABLE", getTableName(WHOIS_COUNTS, yearMonth));
+            .put("RDAP_COUNTS_TABLE", getTableName(RDAP_COUNTS, yearMonth));
 
     queriesBuilder.put(
         getTableName(ACTIVITY_REPORT_AGGREGATION, yearMonth), aggregateQuery.build());

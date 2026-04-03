@@ -40,16 +40,16 @@ import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
 import io.netty.handler.codec.LengthFieldPrepender;
 import io.netty.handler.ssl.SslProvider;
 import io.netty.handler.timeout.ReadTimeoutHandler;
+import jakarta.inject.Named;
+import jakarta.inject.Provider;
+import jakarta.inject.Qualifier;
+import jakarta.inject.Singleton;
 import java.io.IOException;
 import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Supplier;
-import javax.inject.Named;
-import javax.inject.Provider;
-import javax.inject.Qualifier;
-import javax.inject.Singleton;
 
 /** A module that provides the {@link FrontendProtocol} used for epp protocol. */
 @Module
@@ -70,12 +70,14 @@ public final class EppProtocolModule {
       ProxyConfig config,
       @EppProtocol int eppPort,
       @EppProtocol ImmutableList<Provider<? extends ChannelHandler>> handlerProviders,
-      @HttpsRelayProtocol BackendProtocol.Builder backendProtocolBuilder) {
+      @HttpsRelayProtocol BackendProtocol.Builder backendProtocolBuilder,
+      @HttpsRelayProtocol boolean localRelay) {
     return Protocol.frontendBuilder()
         .name(PROTOCOL_NAME)
         .port(eppPort)
         .handlerProviders(handlerProviders)
-        .relayProtocol(backendProtocolBuilder.host(config.epp.relayHost).build())
+        .relayProtocol(
+            backendProtocolBuilder.host(localRelay ? "localhost" : config.epp.relayHost).build())
         .build();
   }
 
@@ -114,7 +116,7 @@ public final class EppProtocolModule {
         config.epp.headerLengthBytes,
         // Adjustment applied to the header field value in order to obtain message length.
         -config.epp.headerLengthBytes,
-        // Initial bytes to strip (i.e. strip the length header).
+        // Initial bytes to strip (i.e., strip the length header).
         config.epp.headerLengthBytes);
   }
 
@@ -149,10 +151,17 @@ public final class EppProtocolModule {
   static EppServiceHandler provideEppServiceHandler(
       @Named("idToken") Supplier<String> idTokenSupplier,
       @Named("hello") byte[] helloBytes,
+      @Named("canary") boolean canary,
       FrontendMetrics metrics,
-      ProxyConfig config) {
+      ProxyConfig config,
+      @HttpsRelayProtocol boolean localRelay) {
     return new EppServiceHandler(
-        config.epp.relayHost, config.epp.relayPath, idTokenSupplier, helloBytes, metrics);
+        localRelay ? "localhost" : config.epp.relayHost,
+        config.epp.relayPath,
+        canary,
+        idTokenSupplier,
+        helloBytes,
+        metrics);
   }
 
   @Singleton

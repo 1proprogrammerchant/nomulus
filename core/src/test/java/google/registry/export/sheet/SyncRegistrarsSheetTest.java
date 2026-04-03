@@ -23,7 +23,7 @@ import static google.registry.testing.DatabaseHelper.createTld;
 import static google.registry.testing.DatabaseHelper.loadByKey;
 import static google.registry.testing.DatabaseHelper.persistNewRegistrar;
 import static google.registry.testing.DatabaseHelper.persistResource;
-import static google.registry.testing.DatabaseHelper.persistSimpleResources;
+import static google.registry.testing.DatabaseHelper.persistResources;
 import static org.joda.money.CurrencyUnit.JPY;
 import static org.joda.money.CurrencyUnit.USD;
 import static org.joda.time.DateTimeZone.UTC;
@@ -168,9 +168,8 @@ public class SyncRegistrarsSheetTest {
                 .setTypes(ImmutableSet.of(RegistrarPoc.Type.ADMIN))
                 // Purposely flip the internal/external admin/tech
                 // distinction to make sure we're not relying on it.  Sigh.
-                .setVisibleInWhoisAsAdmin(false)
-                .setVisibleInWhoisAsTech(true)
-                .setLoginEmailAddress("john.doe@example.tld")
+                .setVisibleInRdapAsAdmin(false)
+                .setVisibleInRdapAsTech(true)
                 .build(),
             new RegistrarPoc.Builder()
                 .setRegistrar(registrar)
@@ -180,7 +179,7 @@ public class SyncRegistrarsSheetTest {
                 .build());
     // Use registrar key for contacts' parent.
     DateTime registrarCreationTime = persistResource(registrar).getCreationTime();
-    persistSimpleResources(contacts);
+    persistResources(contacts);
 
     clock.advanceBy(standardMinutes(1));
     newSyncRegistrarsSheet().run("foobar");
@@ -189,7 +188,7 @@ public class SyncRegistrarsSheetTest {
     ImmutableList<ImmutableMap<String, String>> rows = getOnlyElement(rowsCaptor.getAllValues());
     assertThat(rows).hasSize(2);
 
-    ImmutableMap<String, String> row = rows.get(0);
+    ImmutableMap<String, String> row = rows.getFirst();
     assertThat(row).containsEntry("registrarId", "aaaregistrar");
     assertThat(row).containsEntry("registrarName", "AAA Registrar Inc.");
     assertThat(row).containsEntry("state", "SUSPENDED");
@@ -197,40 +196,38 @@ public class SyncRegistrarsSheetTest {
     assertThat(row)
         .containsEntry(
             "primaryContacts",
-            ""
-                + "Jane Doe\n"
-                + "contact@example.com\n"
-                + "Tel: +1.1234567890\n"
-                + "Types: [ADMIN, BILLING]\n"
-                + "Visible in registrar WHOIS query as Admin contact: No\n"
-                + "Visible in registrar WHOIS query as Technical contact: No\n"
-                + "Phone number and email visible in domain WHOIS query as "
-                + "Registrar Abuse contact info: No\n"
-                + "Registrar-Console access: No\n"
-                + '\n'
-                + "John Doe\n"
-                + "john.doe@example.tld\n"
-                + "Tel: +1.1234567890\n"
-                + "Fax: +1.1234567891\n"
-                + "Types: [ADMIN]\n"
-                + "Visible in registrar WHOIS query as Admin contact: No\n"
-                + "Visible in registrar WHOIS query as Technical contact: Yes\n"
-                + "Phone number and email visible in domain WHOIS query as "
-                + "Registrar Abuse contact info: No\n"
-                + "Registrar-Console access: Yes\n"
-                + "Login Email Address: john.doe@example.tld\n");
+            """
+            Jane Doe
+            contact@example.com
+            Tel: +1.1234567890
+            Types: [ADMIN, BILLING]
+            Visible in registrar RDAP query as Admin contact: No
+            Visible in registrar RDAP query as Technical contact: No
+            Phone number and email visible in domain RDAP query as Registrar Abuse contact\
+             info: No
+
+            John Doe
+            john.doe@example.tld
+            Tel: +1.1234567890
+            Fax: +1.1234567891
+            Types: [ADMIN]
+            Visible in registrar RDAP query as Admin contact: No
+            Visible in registrar RDAP query as Technical contact: Yes
+            Phone number and email visible in domain RDAP query as Registrar Abuse contact\
+             info: No
+            """);
     assertThat(row)
         .containsEntry(
             "techContacts",
-            ""
-                + "Jane Smith\n"
-                + "pride@example.net\n"
-                + "Types: [TECH]\n"
-                + "Visible in registrar WHOIS query as Admin contact: No\n"
-                + "Visible in registrar WHOIS query as Technical contact: No\n"
-                + "Phone number and email visible in domain WHOIS query as "
-                + "Registrar Abuse contact info: No\n"
-                + "Registrar-Console access: No\n");
+            """
+            Jane Smith
+            pride@example.net
+            Types: [TECH]
+            Visible in registrar RDAP query as Admin contact: No
+            Visible in registrar RDAP query as Technical contact: No
+            Phone number and email visible in domain RDAP query as Registrar Abuse contact\
+             info: No
+            """);
     assertThat(row).containsEntry("marketingContacts", "");
     assertThat(row).containsEntry("abuseContacts", "");
     assertThat(row).containsEntry("whoisInquiryContacts", "");
@@ -238,32 +235,31 @@ public class SyncRegistrarsSheetTest {
     assertThat(row)
         .containsEntry(
             "billingContacts",
-            ""
-                + "Jane Doe\n"
-                + "contact@example.com\n"
-                + "Tel: +1.1234567890\n"
-                + "Types: [ADMIN, BILLING]\n"
-                + "Visible in registrar WHOIS query as Admin contact: No\n"
-                + "Visible in registrar WHOIS query as Technical contact: No\n"
-                + "Phone number and email visible in domain WHOIS query as "
-                + "Registrar Abuse contact info: No\n"
-                + "Registrar-Console access: No\n");
+            """
+            Jane Doe
+            contact@example.com
+            Tel: +1.1234567890
+            Types: [ADMIN, BILLING]
+            Visible in registrar RDAP query as Admin contact: No
+            Visible in registrar RDAP query as Technical contact: No
+            Phone number and email visible in domain RDAP query as Registrar Abuse contact\
+             info: No
+            """);
     assertThat(row).containsEntry("contactsMarkedAsWhoisAdmin", "");
     assertThat(row)
         .containsEntry(
             "contactsMarkedAsWhoisTech",
-            ""
-                + "John Doe\n"
-                + "john.doe@example.tld\n"
-                + "Tel: +1.1234567890\n"
-                + "Fax: +1.1234567891\n"
-                + "Types: [ADMIN]\n"
-                + "Visible in registrar WHOIS query as Admin contact: No\n"
-                + "Visible in registrar WHOIS query as Technical contact: Yes\n"
-                + "Phone number and email visible in domain WHOIS query as "
-                + "Registrar Abuse contact info: No\n"
-                + "Registrar-Console access: Yes\n"
-                + "Login Email Address: john.doe@example.tld\n");
+            """
+            John Doe
+            john.doe@example.tld
+            Tel: +1.1234567890
+            Fax: +1.1234567891
+            Types: [ADMIN]
+            Visible in registrar RDAP query as Admin contact: No
+            Visible in registrar RDAP query as Technical contact: Yes
+            Phone number and email visible in domain RDAP query as Registrar Abuse contact\
+             info: No
+            """);
     assertThat(row).containsEntry("emailAddress", "nowhere@example.org");
     assertThat(row).containsEntry(
         "address.street", "I get fallen back upon since there's no l10n addr");

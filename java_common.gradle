@@ -52,27 +52,26 @@ tasks.test.finalizedBy jacocoTestReport
 configurations {
   deploy_jar.extendsFrom runtimeClasspath
 
-  all.findAll {
+  matching {
     it.name in ['runtimeClasspath', 'compileClasspath']
-  }.each {
+  }.all {
     // JUnit is from org.apache.beam:beam-runners-google-cloud-dataflow-java,
     // and json-simple.
-    it.exclude group: 'junit'
+    exclude group: 'junit'
     // Mockito is from org.apache.beam:beam-runners-google-cloud-dataflow-java
     // See https://issues.apache.org/jira/browse/BEAM-8862
-    it.exclude group: 'org.mockito', module: 'mockito-core'
+    exclude group: 'org.mockito', module: 'mockito-core'
   }
-  all.each {
+  all {
     // log4j has high-profile security vulnerabilities. It's a transitive
     // dependency used by some Apache Beam packages. Excluding it does not
     // impact our troubleshooting needs.
-    it.exclude group: 'org.apache.logging.log4j'
+    exclude group: 'org.apache.logging.log4j'
   }
 }
 
 dependencies {
-    // compatibility with Java 8
-    errorprone("com.google.errorprone:error_prone_core:2.3.4")
+    errorprone("com.google.errorprone:error_prone_core:2.48.0")
 }
 
 test {
@@ -88,6 +87,7 @@ test {
 //
 // A typical use case is to run tests from desktop that accesses Cloud resources.
 tasks.withType(Test).configureEach {
+  maxHeapSize = "4096m"
   def gcp_integration_env_property = 'test.gcp_integration.env'
 
   if (project.hasProperty(gcp_integration_env_property)) {
@@ -109,27 +109,67 @@ tasks.withType(Test).configureEach {
 }
 
 tasks.withType(JavaCompile).configureEach {
-    // The -Werror flag causes Intellij to fail on deprecated api use.
-    // Allow IDE user to turn off this flag by specifying a Gradle VM
-    // option from inside the IDE.
-    if (System.getProperty('no_werror') != 'true' &&
-        // The core project throws an warning about Gradle annotation processor
-        // not compatible with Java source version > 8. Re-assess once the
-        // warning is fixed.
-        getProject().name != 'core') {
-      options.compilerArgs << "-Werror"
-    }
-    options.errorprone.disableWarningsInGeneratedCode = true
-    options.errorprone.errorproneArgumentProviders.add([
-            asArguments: {
-                return ['-XepExcludedPaths:.*/build/generated/.*']
-            }] as CommandLineArgumentProvider)
-    // Disable features currently incompatible with Java 12
-    if ((JavaVersion.current().majorVersion as Integer) > 11) {
-      // This check is broken in Java 12.
-      // See https://github.com/google/error-prone/issues/1257
-      options.errorprone.errorproneArgs=['-Xep:Finally:OFF']
-    }
+  // The -Werror flag causes Intellij to fail on deprecated api use.
+  // Allow IDE user to turn off this flag by specifying a Gradle VM
+  // option from inside the IDE.
+  if (project.hasProperty('no_werror') && project.property('no_werror') == 'true') {
+     // skip -Werror
+  } else if (System.getProperty('no_werror') == 'true') {
+     // skip -Werror
+  } else {
+    options.compilerArgs << "-Werror"
+  }
+  if (name.equals('compileTestJava')) {
+    // Allow unused methods in tests.
+    options.errorprone.disable("UnusedMethod")
+    // Allow unused variables in tests.
+    // TODO(b/498588847): uncomment below when the global suppression
+    // below is removed.
+    // options.errorprone.disable("UnusedVariable")
+  }
+  // Allow using non-constant strings in log.
+  options.errorprone.disable("FloggerLogString")
+  // Allow using @error in javadoc.
+  options.errorprone.disable("InvalidBlockTag")
+  // Allow creating format string as single-use variables.
+  options.errorprone.disable("InlineFormatString")
+  // TODO: enable this check once we fix all existing violations.
+  options.errorprone.disable("NullableOptional")
+  // Allow implicit cast from long to double.
+  options.errorprone.disable("LongDoubleConversion")
+  // Allow import of commonly-used names such as "Type".
+  options.errorprone.disable("BadImport")
+
+  // TODO(b/498588847): Review suppressed checks below
+  // Disable new checks in 2.48.0 that break the build with -Werror
+  options.errorprone.disable("ExpensiveLenientFormatString")
+  options.errorprone.disable("EnumOrdinal")
+  // Triggered by JapaneseLanguageValidator
+  options.errorprone.disable("ClassInitializationDeadlock")
+  // Allow unused variables globally.
+  options.errorprone.disable("UnusedVariable")
+  options.errorprone.disable("AnnotateFormatMethod")
+  options.errorprone.disable("EffectivelyPrivate")
+  options.errorprone.disable("JdkObsolete")
+  options.errorprone.disable("ImpossibleNullComparison")
+  options.errorprone.disable("UnnecessaryAssignment")
+  options.errorprone.disable("PatternMatchingInstanceof")
+  options.errorprone.disable("IntLiteralCast")
+  options.errorprone.disable("SystemConsoleNull")
+  options.errorprone.disable("FormatStringShouldUsePlaceholders")
+  options.errorprone.disable("BooleanLiteral")
+  options.errorprone.disable("StatementSwitchToExpressionSwitch")
+  options.errorprone.disable("AssignmentExpression")
+  options.errorprone.disable("JavaDurationGetSecondsToToSeconds")
+  options.errorprone.disable("StringConcatToTextBlock")
+  options.errorprone.disable("TruthConstantAsserts")
+  options.errorprone.disable("NullArgumentForNonNullParameter")
+
+  options.errorprone.disableWarningsInGeneratedCode = true
+  options.errorprone.errorproneArgumentProviders.add([
+          asArguments: {
+            return ['-XepExcludedPaths:.*/build/generated/.*']
+          }] as CommandLineArgumentProvider)
 }
 
 compileJava { options.encoding = "UTF-8" }
@@ -144,7 +184,7 @@ spotless {
     target '**/*.gradle'
     targetExclude '**/cloudbuild-caches/**'
     trimTrailingWhitespace()
-    indentWithSpaces(2)
+    leadingTabsToSpaces(2)
     endWithNewline()
   }
 }

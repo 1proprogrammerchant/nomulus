@@ -17,6 +17,7 @@ package google.registry.flows.domain;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Strings.isNullOrEmpty;
 import static google.registry.dns.DnsUtils.requestDomainDnsRefresh;
+import static google.registry.flows.FlowUtils.DELETE_PROHIBITED_STATUSES;
 import static google.registry.flows.FlowUtils.createHistoryEntryId;
 import static google.registry.flows.FlowUtils.persistEntityChanges;
 import static google.registry.flows.FlowUtils.validateRegistrarIsLoggedIn;
@@ -44,15 +45,18 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.Sets;
+import com.google.common.flogger.FluentLogger;
 import google.registry.batch.AsyncTaskEnqueuer;
+import google.registry.config.RegistryConfig;
 import google.registry.flows.EppException;
 import google.registry.flows.EppException.AssociationProhibitsOperationException;
 import google.registry.flows.ExtensionManager;
 import google.registry.flows.FlowModule.RegistrarId;
 import google.registry.flows.FlowModule.Superuser;
 import google.registry.flows.FlowModule.TargetId;
+import google.registry.flows.MutatingFlow;
 import google.registry.flows.SessionMetadata;
-import google.registry.flows.TransactionalFlow;
+import google.registry.flows.SqlStatementLoggingFlow;
 import google.registry.flows.annotations.ReportingSpec;
 import google.registry.flows.custom.DomainDeleteFlowCustomLogic;
 import google.registry.flows.custom.DomainDeleteFlowCustomLogic.AfterValidationParameters;
@@ -73,6 +77,7 @@ import google.registry.model.domain.fee.FeeTransformResponseExtension;
 import google.registry.model.domain.fee06.FeeDeleteResponseExtensionV06;
 import google.registry.model.domain.fee11.FeeDeleteResponseExtensionV11;
 import google.registry.model.domain.fee12.FeeDeleteResponseExtensionV12;
+import google.registry.model.domain.feestdv1.FeeDeleteResponseExtensionStdV1;
 import google.registry.model.domain.metadata.MetadataExtension;
 import google.registry.model.domain.rgp.GracePeriodStatus;
 import google.registry.model.domain.secdns.SecDnsCreateExtension;
@@ -92,11 +97,11 @@ import google.registry.model.reporting.IcannReportingTypes.ActivityReportField;
 import google.registry.model.tld.Tld;
 import google.registry.model.tld.Tld.TldType;
 import google.registry.model.transfer.TransferStatus;
+import jakarta.inject.Inject;
 import java.util.Collections;
 import java.util.Optional;
 import java.util.Set;
 import javax.annotation.Nullable;
-import javax.inject.Inject;
 import org.joda.money.Money;
 import org.joda.time.DateTime;
 import org.joda.time.Duration;
@@ -115,12 +120,9 @@ import org.joda.time.Duration;
  * @error {@link DomainFlowUtils.NotAuthorizedForTldException}
  */
 @ReportingSpec(ActivityReportField.DOMAIN_DELETE)
-public final class DomainDeleteFlow implements TransactionalFlow {
+public final class DomainDeleteFlow implements MutatingFlow, SqlStatementLoggingFlow {
 
-  private static final ImmutableSet<StatusValue> DISALLOWED_STATUSES = ImmutableSet.of(
-      StatusValue.CLIENT_DELETE_PROHIBITED,
-      StatusValue.PENDING_DELETE,
-      StatusValue.SERVER_DELETE_PROHIBITED);
+  private static final FluentLogger logger = FluentLogger.forEnclosingClass();
 
   @Inject ExtensionManager extensionManager;
   @Inject EppInput eppInput;
@@ -150,7 +152,7 @@ public final class DomainDeleteFlow implements TransactionalFlow {
     verifyDeleteAllowed(existingDomain, tld, now);
     flowCustomLogic.afterValidation(
         AfterValidationParameters.newBuilder().setExistingDomain(existingDomain).build());
-    ImmutableSet.Builder<ImmutableObject> entitiesToSave = new ImmutableSet.Builder<>();
+    ImmutableSet.Builder<ImmutableObject> entitiesToInsert = new ImmutableSet.Builder<>();
     Domain.Builder builder;
     if (existingDomain.getStatusValues().contains(StatusValue.PENDING_TRANSFER)) {
       builder =
@@ -212,26 +214,33 @@ public final class DomainDeleteFlow implements TransactionalFlow {
     // superuser (i.e. the registrar didn't request this delete and thus should be notified even if
     // it is synchronous).
     if (durationUntilDelete.isLongerThan(Duration.ZERO) || isSuperuser) {
-      PollMessage.OneTime deletePollMessage =
-          createDeletePollMessage(existingDomain, domainHistoryId, deletionTime);
-      entitiesToSave.add(deletePollMessage);
-      builder.setDeletePollMessage(deletePollMessage.createVKey());
+      if (RegistryConfig.getNoPollMessageOnDeletionRegistrarIds()
+          .contains(existingDomain.getCurrentSponsorRegistrarId())) {
+        logger.atInfo().log(
+            "Skipping poll message on domain deletion for registrar %s due to configuration",
+            existingDomain.getCurrentSponsorRegistrarId());
+      } else {
+        PollMessage.OneTime deletePollMessage =
+            createDeletePollMessage(existingDomain, domainHistoryId, deletionTime);
+        entitiesToInsert.add(deletePollMessage);
+        builder.setDeletePollMessage(deletePollMessage.createVKey());
+      }
     }
 
     // Send a second poll message immediately if the domain is being deleted asynchronously by a
     // registrar other than the sponsoring registrar (which will necessarily be a superuser).
     if (durationUntilDelete.isLongerThan(Duration.ZERO)
         && !registrarId.equals(existingDomain.getPersistedCurrentSponsorRegistrarId())) {
-      entitiesToSave.add(
+      entitiesToInsert.add(
           createImmediateDeletePollMessage(existingDomain, domainHistoryId, now, deletionTime));
     }
 
     // Cancel any grace periods that were still active, and set the expiration time accordingly.
-    DateTime newExpirationTime = existingDomain.getRegistrationExpirationTime();
+    DateTime newExpirationTime = existingDomain.getRegistrationExpirationDateTime();
     for (GracePeriod gracePeriod : existingDomain.getGracePeriods()) {
       // No cancellation is written if the grace period was not for a billable event.
       if (gracePeriod.hasBillingEvent()) {
-        entitiesToSave.add(
+        entitiesToInsert.add(
             BillingCancellation.forGracePeriod(gracePeriod, now, domainHistoryId, targetId));
         if (gracePeriod.getBillingEvent() != null) {
           // Take the amount of registration time being refunded off the expiration time.
@@ -263,7 +272,7 @@ public final class DomainDeleteFlow implements TransactionalFlow {
     // ResourceDeleteFlow since it's listed in serverApproveEntities.
     requestDomainDnsRefresh(existingDomain.getDomainName());
 
-    entitiesToSave.add(newDomain, domainHistory);
+    entitiesToInsert.add(domainHistory);
     EntityChanges entityChanges =
         flowCustomLogic.beforeSave(
             BeforeSaveParameters.newBuilder()
@@ -271,13 +280,16 @@ public final class DomainDeleteFlow implements TransactionalFlow {
                 .setNewDomain(newDomain)
                 .setHistoryEntry(domainHistory)
                 .setEntityChanges(
-                    EntityChanges.newBuilder().setSaves(entitiesToSave.build()).build())
+                    EntityChanges.newBuilder()
+                        .setInserts(entitiesToInsert.build())
+                        .addUpdate(newDomain)
+                        .build())
                 .build());
     BeforeResponseReturnData responseData =
         flowCustomLogic.beforeResponse(
             BeforeResponseParameters.newBuilder()
                 .setResultCode(
-                    newDomain.getDeletionTime().isAfter(now)
+                    newDomain.getDeletionDateTime().isAfter(now)
                         ? SUCCESS_WITH_ACTION_PENDING
                         : SUCCESS)
                 .setResponseExtensions(
@@ -292,9 +304,10 @@ public final class DomainDeleteFlow implements TransactionalFlow {
 
   private void verifyDeleteAllowed(Domain existingDomain, Tld tld, DateTime now)
       throws EppException {
-    verifyNoDisallowedStatuses(existingDomain, DISALLOWED_STATUSES);
     verifyOptionalAuthInfo(authInfo, existingDomain);
+    verifyNoDisallowedStatuses(existingDomain, ImmutableSet.of(StatusValue.PENDING_DELETE));
     if (!isSuperuser) {
+      verifyNoDisallowedStatuses(existingDomain, DELETE_PROHIBITED_STATUSES);
       verifyResourceOwnership(registrarId, existingDomain);
       verifyNotInPredelegation(tld, now);
       checkAllowedAccessToTld(registrarId, tld.getTld().toString());
@@ -416,6 +429,9 @@ public final class DomainDeleteFlow implements TransactionalFlow {
   @Nullable
   private FeeTransformResponseExtension.Builder getDeleteResponseBuilder() {
     Set<String> uris = nullToEmpty(sessionMetadata.getServiceExtensionUris());
+    if (uris.contains(ServiceExtension.FEE_1_00.getUri())) {
+      return new FeeDeleteResponseExtensionStdV1.Builder();
+    }
     if (uris.contains(ServiceExtension.FEE_0_12.getUri())) {
       return new FeeDeleteResponseExtensionV12.Builder();
     }

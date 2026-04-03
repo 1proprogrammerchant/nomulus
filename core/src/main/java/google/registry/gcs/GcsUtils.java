@@ -33,13 +33,13 @@ import com.google.common.flogger.FluentLogger;
 import com.google.common.net.MediaType;
 import google.registry.config.CredentialModule.ApplicationDefaultCredential;
 import google.registry.util.GoogleCredentialsBundle;
+import jakarta.inject.Inject;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.Serializable;
 import java.nio.channels.Channels;
 import javax.annotation.CheckReturnValue;
-import javax.inject.Inject;
 
 /**
  * Utilities for working with Google Cloud Storage.
@@ -116,6 +116,14 @@ public class GcsUtils implements Serializable {
   /** Delete the given GCS file. */
   public void delete(BlobId blobId) throws StorageException {
     storage().delete(blobId);
+  }
+
+  /** Update file content type on existing GCS file */
+  public void updateContentType(BlobId blobId, String contentType) throws StorageException {
+    if (existsAndNotEmpty(blobId)) {
+      Blob blob = storage().get(blobId);
+      blob.toBuilder().setContentType(contentType).build().update();
+    }
   }
 
   /**

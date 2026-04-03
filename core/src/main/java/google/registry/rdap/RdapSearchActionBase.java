@@ -14,9 +14,9 @@
 
 package google.registry.rdap;
 
-import static com.google.common.base.Charsets.UTF_8;
 import static google.registry.persistence.transaction.TransactionManagerFactory.replicaTm;
 import static google.registry.util.DateTimeUtils.END_OF_TIME;
+import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableListMultimap;
@@ -31,7 +31,8 @@ import google.registry.request.HttpException.BadRequestException;
 import google.registry.request.HttpException.UnprocessableEntityException;
 import google.registry.request.Parameter;
 import google.registry.request.ParameterMap;
-import google.registry.request.RequestUrl;
+import jakarta.inject.Inject;
+import jakarta.persistence.criteria.CriteriaBuilder;
 import java.io.UnsupportedEncodingException;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -41,11 +42,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import javax.inject.Inject;
-import javax.persistence.criteria.CriteriaBuilder;
 
 /**
- * Base RDAP (new WHOIS) action for domain, nameserver and entity search requests.
+ * Base RDAP action for domain, nameserver and entity search requests.
  *
  * @see <a href="https://tools.ietf.org/html/rfc9082">RFC 9082: Registration Data Access Protocol
  *     (RDAP) Query Format</a>
@@ -54,7 +53,6 @@ public abstract class RdapSearchActionBase extends RdapActionBase {
 
   private static final int RESULT_SET_SIZE_SCALING_FACTOR = 30;
 
-  @Inject @RequestUrl String requestUrl;
   @Inject @ParameterMap ImmutableListMultimap<String, String> parameterMap;
   @Inject @Parameter("cursor") Optional<String> cursorTokenParam;
   @Inject @Parameter("registrar") Optional<String> registrarParam;
@@ -69,7 +67,7 @@ public abstract class RdapSearchActionBase extends RdapActionBase {
   public final BaseSearchResponse getJsonObjectForResource(
       String pathSearchString, boolean isHeadRequest) {
     // The pathSearchString is not used by search commands.
-    if (pathSearchString.length() > 0) {
+    if (!pathSearchString.isEmpty()) {
       throw new BadRequestException("Unexpected path");
     }
     decodeCursorToken();
@@ -121,7 +119,7 @@ public abstract class RdapSearchActionBase extends RdapActionBase {
    */
   protected boolean shouldBeVisible(EppResource eppResource) {
     return isAuthorized(eppResource)
-        && (!registrarParam.isPresent()
+        && (registrarParam.isEmpty()
             || registrarParam.get().equals(eppResource.getPersistedCurrentSponsorRegistrarId()));
   }
 
@@ -135,7 +133,7 @@ public abstract class RdapSearchActionBase extends RdapActionBase {
    */
   protected boolean shouldBeVisible(Registrar registrar) {
     return isAuthorized(registrar)
-        && (!registrarParam.isPresent() || registrarParam.get().equals(registrar.getRegistrarId()));
+        && (registrarParam.isEmpty() || registrarParam.get().equals(registrar.getRegistrarId()));
   }
 
   /**
@@ -157,7 +155,6 @@ public abstract class RdapSearchActionBase extends RdapActionBase {
    */
   <T extends EppResource> RdapResultSet<T> getMatchingResources(
       CriteriaQueryBuilder<T> builder, boolean checkForVisibility, int querySizeLimit) {
-    replicaTm().assertInTransaction();
     Optional<String> desiredRegistrar = getDesiredRegistrar();
     if (desiredRegistrar.isPresent()) {
       builder =
@@ -323,7 +320,8 @@ public abstract class RdapSearchActionBase extends RdapActionBase {
     if (partialStringQuery.getHasWildcard()) {
       builder =
           builder.where(
-              filterField, criteriaBuilder::like,
+              filterField,
+              criteriaBuilder::like,
               String.format("%s%%", partialStringQuery.getInitialString()));
     } else {
       // no wildcard means we use a standard equals query

@@ -46,19 +46,18 @@ import google.registry.request.ParameterMap;
 import google.registry.request.RequestParameters;
 import google.registry.request.Response;
 import google.registry.request.auth.Auth;
+import jakarta.inject.Inject;
 import java.util.Optional;
 import java.util.stream.Stream;
-import javax.inject.Inject;
 
 /**
  * Action for fanning out cron tasks shared by TLD.
  *
- * <h3>Parameters Reference</h3>
+ * <h2>Parameters Reference</h2>
  *
  * <ul>
  *   <li>{@code endpoint} (Required) URL path of servlet to launch. This may contain pathargs.
- *   <li>{@code queue} (Required) Name of the App Engine push queue to which this task should be
- *       sent.
+ *   <li>{@code queue} (Required) Name of the queue to which this task should be sent.
  *   <li>{@code forEachRealTld} Launch the task in each real TLD namespace.
  *   <li>{@code forEachTestTld} Launch the task in each test TLD namespace.
  *   <li>{@code runInEmpty} Launch the task once, without the TLD argument.
@@ -68,7 +67,7 @@ import javax.inject.Inject;
  *       task.
  * </ul>
  *
- * <h3>Patharg Reference</h3>
+ * <h2>Patharg Reference</h2>
  *
  * <p>The following values may be specified inside the "endpoint" param.
  *
@@ -78,10 +77,10 @@ import javax.inject.Inject;
  * </ul>
  */
 @Action(
-    service = Action.Service.BACKEND,
+    service = Service.BACKEND,
     path = "/_dr/cron/fanout",
     automaticallyPrintOk = true,
-    auth = Auth.AUTH_API_ADMIN)
+    auth = Auth.AUTH_ADMIN)
 public final class TldFanoutAction implements Runnable {
 
   /** A set of control params to TldFanoutAction that aren't passed down to the executing action. */
@@ -157,7 +156,7 @@ public final class TldFanoutAction implements Runnable {
       params = ArrayListMultimap.create(params);
       params.put(RequestParameters.PARAM_TLD, tld);
     }
-    return cloudTasksUtils.createPostTaskWithJitter(
-        endpoint, Service.BACKEND, params, jitterSeconds);
+    return cloudTasksUtils.createTaskWithJitter(
+        endpoint, Action.Method.POST, Service.BACKEND, params, jitterSeconds);
   }
 }

@@ -18,12 +18,13 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.net.MediaType.PLAIN_TEXT_UTF_8;
 import static google.registry.flows.FlowUtils.marshalWithLenientRetry;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
+import static google.registry.util.DateTimeUtils.END_INSTANT;
 import static google.registry.util.DateTimeUtils.END_OF_TIME;
 import static google.registry.util.ResourceUtils.readResourceUtf8;
+import static jakarta.servlet.http.HttpServletResponse.SC_INTERNAL_SERVER_ERROR;
+import static jakarta.servlet.http.HttpServletResponse.SC_NO_CONTENT;
+import static jakarta.servlet.http.HttpServletResponse.SC_OK;
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static javax.servlet.http.HttpServletResponse.SC_INTERNAL_SERVER_ERROR;
-import static javax.servlet.http.HttpServletResponse.SC_NO_CONTENT;
-import static javax.servlet.http.HttpServletResponse.SC_OK;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.flogger.FluentLogger;
@@ -41,10 +42,10 @@ import google.registry.request.Response;
 import google.registry.request.auth.Auth;
 import google.registry.request.lock.LockHandler;
 import google.registry.util.Clock;
+import jakarta.inject.Inject;
 import java.util.Optional;
 import java.util.concurrent.Callable;
 import java.util.logging.Level;
-import javax.inject.Inject;
 import org.joda.time.DateTime;
 import org.joda.time.Duration;
 
@@ -69,7 +70,7 @@ import org.joda.time.Duration;
 @Action(
     service = Action.Service.BACKEND,
     path = DeleteExpiredDomainsAction.PATH,
-    auth = Auth.AUTH_API_ADMIN)
+    auth = Auth.AUTH_ADMIN)
 public class DeleteExpiredDomainsAction implements Runnable {
 
   public static final String PATH = "/_dr/task/deleteExpiredDomains";
@@ -171,13 +172,13 @@ public class DeleteExpiredDomainsAction implements Runnable {
         tm().transact(
                 () -> {
                   Domain transDomain = tm().loadByKey(domain.createVKey());
-                  if (!domain.getAutorenewEndTime().isPresent()
+                  if (domain.getAutorenewEndTime().isEmpty()
                       || domain.getAutorenewEndTime().get().isAfter(tm().getTransactionTime())) {
                     logger.atSevere().log(
                         "Failed to delete domain %s because of its autorenew end time: %s.",
                         transDomain.getDomainName(), transDomain.getAutorenewEndTime());
                     return Optional.empty();
-                  } else if (domain.getDeletionTime().isBefore(END_OF_TIME)) {
+                  } else if (domain.getDeletionTime().isBefore(END_INSTANT)) {
                     logger.atSevere().log(
                         "Failed to delete domain %s because it was already deleted on %s.",
                         transDomain.getDomainName(), transDomain.getDeletionTime());

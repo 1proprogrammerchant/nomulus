@@ -15,12 +15,11 @@
 package google.registry.batch;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
 import static google.registry.request.Action.Method.POST;
 import static google.registry.tools.LockOrUnlockDomainCommand.REGISTRY_LOCK_STATUSES;
-import static javax.servlet.http.HttpServletResponse.SC_NO_CONTENT;
-import static javax.servlet.http.HttpServletResponse.SC_OK;
+import static jakarta.servlet.http.HttpServletResponse.SC_NO_CONTENT;
+import static jakarta.servlet.http.HttpServletResponse.SC_OK;
 
 import com.google.common.collect.ImmutableSet;
 import com.google.common.flogger.FluentLogger;
@@ -30,8 +29,6 @@ import google.registry.groups.GmailClient;
 import google.registry.model.domain.Domain;
 import google.registry.model.domain.RegistryLock;
 import google.registry.model.eppcommon.StatusValue;
-import google.registry.model.registrar.Registrar;
-import google.registry.model.registrar.RegistrarPoc;
 import google.registry.model.tld.RegistryLockDao;
 import google.registry.persistence.VKey;
 import google.registry.request.Action;
@@ -41,10 +38,10 @@ import google.registry.request.auth.Auth;
 import google.registry.tools.DomainLockUtils;
 import google.registry.util.DateTimeUtils;
 import google.registry.util.EmailMessage;
+import jakarta.inject.Inject;
+import jakarta.mail.internet.AddressException;
+import jakarta.mail.internet.InternetAddress;
 import java.util.Optional;
-import javax.inject.Inject;
-import javax.mail.internet.AddressException;
-import javax.mail.internet.InternetAddress;
 import org.joda.time.Duration;
 
 /** Task that re-locks a previously-Registry-Locked domain after a predetermined period of time. */
@@ -53,7 +50,7 @@ import org.joda.time.Duration;
     path = RelockDomainAction.PATH,
     method = POST,
     automaticallyPrintOk = true,
-    auth = Auth.AUTH_API_ADMIN)
+    auth = Auth.AUTH_ADMIN)
 public class RelockDomainAction implements Runnable {
 
   public static final String PATH = "/_dr/task/relockDomain";
@@ -66,11 +63,17 @@ public class RelockDomainAction implements Runnable {
   private static final Duration ONE_HOUR = Duration.standardHours(1);
 
   private static final String RELOCK_SUCCESS_EMAIL_TEMPLATE =
-      "The domain %s was successfully re-locked.\n\nPlease contact support at %s if you have any "
-          + "questions.";
+      """
+      The domain %s was successfully re-locked.
+
+      Please contact support at %s if you have any questions.\
+      """;
   private static final String RELOCK_NON_RETRYABLE_FAILURE_EMAIL_TEMPLATE =
-      "There was an error when automatically re-locking %s. Error message: %s\n\nPlease contact "
-          + "support at %s if you have any questions.";
+      """
+      There was an error when automatically re-locking %s. Error message: %s
+
+      Please contact support at %s if you have any questions.\
+      """;
   private static final String RELOCK_TRANSIENT_FAILURE_EMAIL_TEMPLATE =
       "There was an unexpected error when automatically re-locking %s. We will continue retrying "
           + "the lock for five hours. Please contact support at %s if you have any questions";
@@ -82,7 +85,6 @@ public class RelockDomainAction implements Runnable {
   private final long oldUnlockRevisionId;
   private final int previousAttempts;
   private final InternetAddress alertRecipientAddress;
-  private final InternetAddress gSuiteOutgoingEmailAddress;
   private final String supportEmail;
   private final GmailClient gmailClient;
   private final DomainLockUtils domainLockUtils;
@@ -93,7 +95,6 @@ public class RelockDomainAction implements Runnable {
       @Parameter(OLD_UNLOCK_REVISION_ID_PARAM) long oldUnlockRevisionId,
       @Parameter(PREVIOUS_ATTEMPTS_PARAM) int previousAttempts,
       @Config("newAlertRecipientEmailAddress") InternetAddress alertRecipientAddress,
-      @Config("gSuiteOutgoingEmailAddress") InternetAddress gSuiteOutgoingEmailAddress,
       @Config("supportEmail") String supportEmail,
       GmailClient gmailClient,
       DomainLockUtils domainLockUtils,
@@ -101,7 +102,6 @@ public class RelockDomainAction implements Runnable {
     this.oldUnlockRevisionId = oldUnlockRevisionId;
     this.previousAttempts = previousAttempts;
     this.alertRecipientAddress = alertRecipientAddress;
-    this.gSuiteOutgoingEmailAddress = gSuiteOutgoingEmailAddress;
     this.supportEmail = supportEmail;
     this.gmailClient = gmailClient;
     this.domainLockUtils = domainLockUtils;
@@ -112,11 +112,11 @@ public class RelockDomainAction implements Runnable {
   public void run() {
     /* We wish to manually control our retry behavior, in order to limit the number of retries
      * and/or notify registrars / support only after a certain number of retries, or only
-     * with a certain type of failure. AppEngine will automatically retry on any non-2xx status
+     * with a certain type of failure. Cloud Tasks will automatically retry on any non-2xx status
      * code, so return SC_NO_CONTENT (204) by default to avoid this auto-retry.
      *
-     * See https://cloud.google.com/appengine/docs/standard/java/taskqueue/push/retrying-tasks
-     * for more details on retry behavior. */
+     * See https://docs.cloud.google.com/tasks/docs/configuring-queues#retry for more details on
+     * retry behavior. */
     response.setStatus(SC_NO_CONTENT);
     response.setContentType(MediaType.PLAIN_TEXT_UTF_8);
     tm().transact(this::relockDomain);
@@ -169,7 +169,7 @@ public class RelockDomainAction implements Runnable {
     domainLockUtils.administrativelyApplyLock(
         oldLock.getDomainName(),
         oldLock.getRegistrarId(),
-        oldLock.getRegistrarPocId(),
+        oldLock.getRegistryLockEmail(),
         oldLock.isSuperuser());
     logger.atInfo().log("Re-locked domain %s.", oldLock.getDomainName());
     response.setStatus(SC_OK);
@@ -188,7 +188,7 @@ public class RelockDomainAction implements Runnable {
         "Domain %s has a pending delete.",
         domainName);
     checkArgument(
-        !DateTimeUtils.isAtOrAfter(tm().getTransactionTime(), domain.getDeletionTime()),
+        !DateTimeUtils.isAtOrAfter(tm().getTxTime(), domain.getDeletionTime()),
         "Domain %s has been deleted.",
         domainName);
     checkArgument(
@@ -217,10 +217,9 @@ public class RelockDomainAction implements Runnable {
             supportEmail);
     gmailClient.sendEmail(
         EmailMessage.newBuilder()
-            .setFrom(gSuiteOutgoingEmailAddress)
             .setBody(body)
             .setSubject(String.format("Error re-locking domain %s", oldLock.getDomainName()))
-            .setRecipients(getEmailRecipients(oldLock.getRegistrarId()))
+            .setRecipients(ImmutableSet.of(getEmailRecipient(oldLock)))
             .build());
   }
 
@@ -247,10 +246,9 @@ public class RelockDomainAction implements Runnable {
 
     gmailClient.sendEmail(
         EmailMessage.newBuilder()
-            .setFrom(gSuiteOutgoingEmailAddress)
             .setBody(body)
             .setSubject(String.format("Successful re-lock of domain %s", oldLock.getDomainName()))
-            .setRecipients(getEmailRecipients(oldLock.getRegistrarId()))
+            .setRecipients(ImmutableSet.of(getEmailRecipient(oldLock)))
             .build());
   }
 
@@ -261,12 +259,11 @@ public class RelockDomainAction implements Runnable {
     // For an unexpected failure, notify both the lock-enabled contacts and our alerting email
     ImmutableSet<InternetAddress> allRecipients =
         new ImmutableSet.Builder<InternetAddress>()
-            .addAll(getEmailRecipients(oldLock.getRegistrarId()))
+            .add(getEmailRecipient(oldLock))
             .add(alertRecipientAddress)
             .build();
     gmailClient.sendEmail(
         EmailMessage.newBuilder()
-            .setFrom(gSuiteOutgoingEmailAddress)
             .setBody(body)
             .setSubject(String.format("Error re-locking domain %s", oldLock.getDomainName()))
             .setRecipients(allRecipients)
@@ -276,38 +273,18 @@ public class RelockDomainAction implements Runnable {
   private void sendUnknownRevisionIdAlertEmail() {
     gmailClient.sendEmail(
         EmailMessage.newBuilder()
-            .setFrom(gSuiteOutgoingEmailAddress)
             .setBody(String.format(RELOCK_UNKNOWN_ID_FAILURE_EMAIL_TEMPLATE, oldUnlockRevisionId))
             .setSubject("Error re-locking domain")
             .setRecipients(ImmutableSet.of(alertRecipientAddress))
             .build());
   }
 
-  private ImmutableSet<InternetAddress> getEmailRecipients(String registrarId) {
-    Registrar registrar =
-        Registrar.loadByRegistrarIdCached(registrarId)
-            .orElseThrow(
-                () ->
-                    new IllegalStateException(String.format("Unknown registrar %s", registrarId)));
-
-    ImmutableSet<String> registryLockEmailAddresses =
-        registrar.getContacts().stream()
-            .filter(RegistrarPoc::isRegistryLockAllowed)
-            .map(RegistrarPoc::getRegistryLockEmailAddress)
-            .filter(Optional::isPresent)
-            .map(Optional::get)
-            .collect(toImmutableSet());
-
-    ImmutableSet.Builder<InternetAddress> builder = new ImmutableSet.Builder<>();
-    // can't use streams due to the 'throws' in the InternetAddress constructor
-    for (String registryLockEmailAddress : registryLockEmailAddresses) {
-      try {
-        builder.add(new InternetAddress(registryLockEmailAddress));
-      } catch (AddressException e) {
-        // This shouldn't stop any other emails going out, so swallow it
-        logger.atWarning().log("Invalid email address '%s'.", registryLockEmailAddress);
-      }
+  private InternetAddress getEmailRecipient(RegistryLock lock) {
+    try {
+      return new InternetAddress(lock.getRegistryLockEmail());
+    } catch (AddressException e) {
+      // this really shouldn't happen
+      throw new RuntimeException(e);
     }
-    return builder.build();
   }
 }

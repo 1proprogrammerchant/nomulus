@@ -62,7 +62,7 @@ final class GetAllocationTokenCommand implements Command {
       if (loadedTokens.containsKey(token)) {
         AllocationToken loadedToken = loadedTokens.get(token);
         System.out.println(loadedToken.toString());
-        if (!loadedToken.getRedemptionHistoryId().isPresent()) {
+        if (loadedToken.getRedemptionHistoryId().isEmpty()) {
           System.out.printf("Token %s was not redeemed.\n", token);
         } else {
           VKey<Domain> domainKey =
@@ -89,8 +89,7 @@ final class GetAllocationTokenCommand implements Command {
     ImmutableList<VKey<Domain>> domainKeys =
         tokens.stream()
             .map(AllocationToken::getRedemptionHistoryId)
-            .filter(Optional::isPresent)
-            .map(Optional::get)
+            .flatMap(Optional::stream)
             .map(hi -> tm().loadByKey(VKey.create(DomainHistory.class, hi)))
             .map(dh -> VKey.create(Domain.class, dh.getRepoId()))
             .collect(toImmutableList());

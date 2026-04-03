@@ -25,6 +25,7 @@ import static google.registry.persistence.transaction.TransactionManagerFactory.
 import static google.registry.util.CollectionUtils.nullToEmpty;
 import static google.registry.util.CollectionUtils.nullToEmptyImmutableCopy;
 import static google.registry.util.DateTimeUtils.END_OF_TIME;
+import static google.registry.util.DateTimeUtils.toInstant;
 
 import com.github.benmanes.caffeine.cache.CacheLoader;
 import com.github.benmanes.caffeine.cache.LoadingCache;
@@ -34,19 +35,21 @@ import com.google.common.collect.ImmutableSet;
 import com.google.gson.annotations.Expose;
 import google.registry.config.RegistryConfig;
 import google.registry.model.eppcommon.StatusValue;
-import google.registry.model.transfer.TransferData;
 import google.registry.persistence.VKey;
 import google.registry.util.NonFinalForTesting;
+import jakarta.persistence.Access;
+import jakarta.persistence.AccessType;
+import jakarta.persistence.AttributeOverride;
+import jakarta.persistence.Column;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.MappedSuperclass;
+import jakarta.persistence.Transient;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import javax.persistence.Access;
-import javax.persistence.AccessType;
-import javax.persistence.AttributeOverride;
-import javax.persistence.Column;
-import javax.persistence.MappedSuperclass;
-import javax.persistence.Transient;
 import org.joda.time.DateTime;
 
 /** An EPP entity object (i.e. a domain, contact, or host). */
@@ -133,7 +136,9 @@ public abstract class EppResource extends UpdateAutoTimestampEntity implements B
   @Expose DateTime lastEppUpdateTime;
 
   /** Status values associated with this resource. */
-  @Expose Set<StatusValue> statuses;
+  @Enumerated(EnumType.STRING)
+  @Expose
+  Set<StatusValue> statuses;
 
   public String getRepoId() {
     return repoId;
@@ -160,8 +165,13 @@ public abstract class EppResource extends UpdateAutoTimestampEntity implements B
     return creationRegistrarId;
   }
 
-  public DateTime getLastEppUpdateTime() {
+  @Deprecated
+  public DateTime getLastEppUpdateDateTime() {
     return lastEppUpdateTime;
+  }
+
+  public Instant getLastEppUpdateTime() {
+    return toInstant(lastEppUpdateTime);
   }
 
   public String getLastEppUpdateRegistrarId() {
@@ -182,12 +192,21 @@ public abstract class EppResource extends UpdateAutoTimestampEntity implements B
     return nullToEmptyImmutableCopy(statuses);
   }
 
-  public DateTime getDeletionTime() {
+  @Deprecated
+  public DateTime getDeletionDateTime() {
     return deletionTime;
   }
 
+  public Instant getDeletionTime() {
+    return toInstant(deletionTime);
+  }
+
   /** Return a clone of the resource with timed status values modified using the given time. */
+  @Deprecated
   public abstract EppResource cloneProjectedAtTime(DateTime now);
+
+  /** Return a clone of the resource with timed status values modified using the given time. */
+  public abstract EppResource cloneProjectedAtInstant(Instant now);
 
   /** Get the foreign key string for this resource. */
   public abstract String getForeignKey();
@@ -202,27 +221,6 @@ public abstract class EppResource extends UpdateAutoTimestampEntity implements B
 
   /** EppResources that are loaded via foreign keys should implement this marker interface. */
   public interface ForeignKeyedEppResource {}
-
-  /** An interface for resources that have transfer data. */
-  public interface ResourceWithTransferData<T extends TransferData> {
-    T getTransferData();
-
-    /**
-     * The time that this resource was last transferred.
-     *
-     * <p>Can be null if the resource has never been transferred.
-     */
-    DateTime getLastTransferTime();
-  }
-
-  /** An interface for builders of resources that have transfer data. */
-  public interface BuilderWithTransferData<
-      T extends TransferData, B extends BuilderWithTransferData<T, B>> {
-    B setTransferData(T transferData);
-
-    /** Set the time when this resource was transferred. */
-    B setLastTransferTime(DateTime lastTransferTime);
-  }
 
   /** Abstract builder for {@link EppResource} types. */
   public abstract static class Builder<T extends EppResource, B extends Builder<T, B>>
@@ -354,17 +352,17 @@ public abstract class EppResource extends UpdateAutoTimestampEntity implements B
   }
 
   static final CacheLoader<VKey<? extends EppResource>, EppResource> CACHE_LOADER =
-      new CacheLoader<VKey<? extends EppResource>, EppResource>() {
+      new CacheLoader<>() {
 
         @Override
         public EppResource load(VKey<? extends EppResource> key) {
-          return replicaTm().transact(() -> replicaTm().loadByKey(key));
+          return replicaTm().reTransact(() -> replicaTm().loadByKey(key));
         }
 
         @Override
-        public Map<VKey<? extends EppResource>, EppResource> loadAll(
-            Iterable<? extends VKey<? extends EppResource>> keys) {
-          return replicaTm().transact(() -> replicaTm().loadByKeys(keys));
+        public Map<? extends VKey<? extends EppResource>, ? extends EppResource> loadAll(
+            Set<? extends VKey<? extends EppResource>> keys) {
+          return replicaTm().reTransact(() -> replicaTm().loadByKeys(keys));
         }
       };
 
@@ -400,24 +398,21 @@ public abstract class EppResource extends UpdateAutoTimestampEntity implements B
    * <p>Don't use this unless you really need it for performance reasons, and be sure that you are
    * OK with the trade-offs in loss of transactional consistency.
    */
-  public static ImmutableMap<VKey<? extends EppResource>, EppResource> loadCached(
+  public static ImmutableMap<VKey<? extends EppResource>, EppResource> loadByCacheIfEnabled(
       Iterable<VKey<? extends EppResource>> keys) {
     if (!RegistryConfig.isEppResourceCachingEnabled()) {
-      return tm().transact(() -> tm().loadByKeys(keys));
+      return tm().reTransact(() -> tm().loadByKeys(keys));
     }
     return ImmutableMap.copyOf(cacheEppResources.getAll(keys));
   }
 
   /**
-   * Loads a given EppResource by its key using the cache (if enabled).
+   * Loads a given EppResource by its key using the cache.
    *
-   * <p>Don't use this unless you really need it for performance reasons, and be sure that you are
-   * OK with the trade-offs in loss of transactional consistency.
+   * <p>This method ignores the `isEppResourceCachingEnabled` config setting. It is reserved for use
+   * cases that can tolerate slightly stale data, e.g., RDAP queries.
    */
-  public static <T extends EppResource> T loadCached(VKey<T> key) {
-    if (!RegistryConfig.isEppResourceCachingEnabled()) {
-      return tm().transact(() -> tm().loadByKey(key));
-    }
+  public static <T extends EppResource> T loadByCache(VKey<T> key) {
     // Safe to cast because loading a Key<T> returns an entity of type T.
     @SuppressWarnings("unchecked")
     T resource = (T) cacheEppResources.get(key);

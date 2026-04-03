@@ -15,22 +15,25 @@
 package google.registry.tools;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static google.registry.model.IdService.allocateId;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
+import static google.registry.util.DateTimeUtils.END_INSTANT;
 import static google.registry.util.DateTimeUtils.END_OF_TIME;
+import static google.registry.util.DateTimeUtils.toDateTime;
 
 import com.beust.jcommander.Parameter;
 import com.beust.jcommander.Parameters;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import google.registry.model.EppResourceUtils;
+import google.registry.model.ForeignKeyUtils;
 import google.registry.model.billing.BillingBase.RenewalPriceBehavior;
 import google.registry.model.billing.BillingRecurrence;
 import google.registry.model.domain.Domain;
 import google.registry.model.domain.DomainHistory;
 import google.registry.model.reporting.HistoryEntry;
 import google.registry.model.reporting.HistoryEntry.HistoryEntryId;
+import google.registry.model.transfer.TransferStatus;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import javax.annotation.Nullable;
@@ -119,7 +122,7 @@ public class UpdateRecurrenceCommand extends ConfirmingCommand {
     domainsAndRecurrences.forEach(
         (domain, existingRecurrence) -> {
           // Make a new history ID to break the (recurrence, history, domain) circular dep chain
-          long newHistoryId = allocateId();
+          long newHistoryId = tm().allocateId();
           HistoryEntryId newDomainHistoryId = new HistoryEntryId(domain.getRepoId(), newHistoryId);
           BillingRecurrence endingNow =
               existingRecurrence.asBuilder().setRecurrenceEndTime(now).build();
@@ -161,21 +164,22 @@ public class UpdateRecurrenceCommand extends ConfirmingCommand {
 
   private ImmutableMap<Domain, BillingRecurrence> loadDomainsAndRecurrences() {
     ImmutableMap.Builder<Domain, BillingRecurrence> result = new ImmutableMap.Builder<>();
-    DateTime now = tm().getTransactionTime();
+    Instant now = tm().getTxTime();
     for (String domainName : mainParameters) {
       Domain domain =
-          EppResourceUtils.loadByForeignKey(Domain.class, domainName, now)
+          ForeignKeyUtils.loadResource(Domain.class, domainName, now)
               .orElseThrow(
                   () ->
                       new IllegalArgumentException(
                           String.format(
                               "Domain %s does not exist or has been deleted", domainName)));
       checkArgument(
-          domain.getDeletionTime().equals(END_OF_TIME),
+          domain.getDeletionTime().equals(END_INSTANT),
           "Domain %s has already had a deletion time set",
           domainName);
       checkArgument(
-          domain.getTransferData().isEmpty(),
+          domain.getTransferData().isEmpty()
+              || domain.getTransferData().getTransferStatus() != TransferStatus.PENDING,
           "Domain %s has a pending transfer: %s",
           domainName,
           domain.getTransferData());
@@ -183,7 +187,7 @@ public class UpdateRecurrenceCommand extends ConfirmingCommand {
       domainAutorenewEndTime.ifPresent(
           endTime ->
               checkArgument(
-                  endTime.isAfter(now),
+                  endTime.isAfter(toDateTime(now)),
                   "Domain %s autorenew ended prior to now at %s",
                   domainName,
                   endTime));

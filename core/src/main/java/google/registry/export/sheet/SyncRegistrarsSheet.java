@@ -38,11 +38,11 @@ import google.registry.model.registrar.RegistrarAddress;
 import google.registry.model.registrar.RegistrarPoc;
 import google.registry.util.Clock;
 import google.registry.util.DateTimeUtils;
+import jakarta.inject.Inject;
 import java.io.IOException;
 import java.util.Optional;
 import java.util.function.Predicate;
 import javax.annotation.Nullable;
-import javax.inject.Inject;
 import org.joda.time.DateTime;
 
 /**
@@ -63,7 +63,7 @@ class SyncRegistrarsSheet {
   boolean wereRegistrarsModified() {
     Optional<Cursor> cursor =
         tm().transact(() -> tm().loadByKeyIfPresent(Cursor.createGlobalVKey(SYNC_REGISTRAR_SHEET)));
-    DateTime lastUpdateTime = !cursor.isPresent() ? START_OF_TIME : cursor.get().getCursorTime();
+    DateTime lastUpdateTime = cursor.isEmpty() ? START_OF_TIME : cursor.get().getCursorTime();
     for (Registrar registrar : Registrar.loadAllCached()) {
       if (DateTimeUtils.isAtOrAfter(registrar.getLastUpdateTime(), lastUpdateTime)) {
         return true;
@@ -128,10 +128,10 @@ class SyncRegistrarsSheet {
                   builder.put("billingContacts", convertContacts(contacts, byType(BILLING)));
                   builder.put(
                       "contactsMarkedAsWhoisAdmin",
-                      convertContacts(contacts, RegistrarPoc::getVisibleInWhoisAsAdmin));
+                      convertContacts(contacts, RegistrarPoc::getVisibleInRdapAsAdmin));
                   builder.put(
                       "contactsMarkedAsWhoisTech",
-                      convertContacts(contacts, RegistrarPoc::getVisibleInWhoisAsTech));
+                      convertContacts(contacts, RegistrarPoc::getVisibleInRdapAsTech));
                   builder.put("emailAddress", convert(registrar.getEmailAddress()));
                   builder.put("address.street", convert(address.getStreet()));
                   builder.put("address.city", convert(address.getCity()));

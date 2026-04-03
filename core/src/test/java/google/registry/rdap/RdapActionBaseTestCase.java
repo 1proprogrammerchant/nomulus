@@ -22,20 +22,25 @@ import static google.registry.request.Action.Method.GET;
 import static google.registry.request.Action.Method.HEAD;
 import static org.mockito.Mockito.mock;
 
-import com.google.appengine.api.users.User;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import google.registry.model.console.User;
+import google.registry.model.console.UserRoles;
 import google.registry.persistence.transaction.JpaTestExtensions;
 import google.registry.persistence.transaction.JpaTestExtensions.JpaIntegrationTestExtension;
 import google.registry.request.Actions;
 import google.registry.request.auth.AuthResult;
-import google.registry.request.auth.AuthSettings.AuthLevel;
-import google.registry.request.auth.UserAuthInfo;
 import google.registry.testing.FakeClock;
 import google.registry.testing.FakeResponse;
 import google.registry.util.Idn;
 import google.registry.util.TypeUtils;
 import java.util.HashMap;
 import java.util.Optional;
+import javax.annotation.Nullable;
 import org.joda.time.DateTime;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -43,22 +48,28 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 /** Common unit test code for actions inheriting {@link RdapActionBase}. */
 abstract class RdapActionBaseTestCase<A extends RdapActionBase> {
 
+  protected final FakeClock clock = new FakeClock(DateTime.parse("2000-01-01TZ"));
+  static final Gson GSON = new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create();
+
   @RegisterExtension
   final JpaIntegrationTestExtension jpa =
-      new JpaTestExtensions.Builder().buildIntegrationTestExtension();
+      new JpaTestExtensions.Builder().withClock(clock).buildIntegrationTestExtension();
 
   protected static final AuthResult AUTH_RESULT =
-      AuthResult.create(
-          AuthLevel.USER,
-          UserAuthInfo.create(new User("rdap.user@user.com", "gmail.com", "12345"), false));
+      AuthResult.createUser(
+          new User.Builder()
+              .setEmailAddress("rdap.user@user.com")
+              .setUserRoles(new UserRoles.Builder().setIsAdmin(false).build())
+              .build());
 
   protected static final AuthResult AUTH_RESULT_ADMIN =
-      AuthResult.create(
-          AuthLevel.USER,
-          UserAuthInfo.create(new User("rdap.admin@google.com", "gmail.com", "12345"), true));
+      AuthResult.createUser(
+          new User.Builder()
+              .setEmailAddress("rdap.admin@google.com")
+              .setUserRoles(new UserRoles.Builder().setIsAdmin(true).build())
+              .build());
 
   protected FakeResponse response = new FakeResponse();
-  protected final FakeClock clock = new FakeClock(DateTime.parse("2000-01-01TZ"));
   final RdapMetrics rdapMetrics = mock(RdapMetrics.class);
 
   RdapAuthorization.Role metricRole = PUBLIC;
@@ -81,6 +92,7 @@ abstract class RdapActionBaseTestCase<A extends RdapActionBase> {
     action.rdapJsonFormatter = RdapTestHelper.getTestRdapJsonFormatter(clock);
     action.rdapMetrics = rdapMetrics;
     action.requestMethod = GET;
+    action.clock = new FakeClock(DateTime.parse("2025-01-01T00:00:00.000Z"));
     logout();
   }
 
@@ -102,42 +114,25 @@ abstract class RdapActionBaseTestCase<A extends RdapActionBase> {
     metricRole = ADMINISTRATOR;
   }
 
-  JsonObject generateActualJson(String domainName) {
-    action.requestPath = actionPath + domainName;
-    action.requestMethod = GET;
-    action.run();
-    return RdapTestHelper.parseJsonObject(response.getPayload());
+  JsonObject generateActualJson(String name) {
+    return RdapTestHelper.parseJsonObject(runAction(name));
   }
 
-  String generateHeadPayload(String domainName) {
-    action.requestPath = actionPath + domainName;
+  String generateHeadPayload(String name) {
     action.requestMethod = HEAD;
-    action.run();
-    return response.getPayload();
+    return runAction(name);
   }
 
   JsonObject generateExpectedJsonError(String description, int code) {
-    String title;
-    switch (code) {
-      case 404:
-        title = "Not Found";
-        break;
-      case 500:
-        title = "Internal Server Error";
-        break;
-      case 501:
-        title = "Not Implemented";
-        break;
-      case 400:
-        title = "Bad Request";
-        break;
-      case 422:
-        title = "Unprocessable Entity";
-        break;
-      default:
-        title = "ERR";
-        break;
-    }
+    String title =
+        switch (code) {
+          case 404 -> "Not Found";
+          case 500 -> "Internal Server Error";
+          case 501 -> "Not Implemented";
+          case 400 -> "Bad Request";
+          case 422 -> "Unprocessable Entity";
+          default -> "ERR";
+        };
     return RdapTestHelper.loadJsonFile(
         "rdap_error.json",
         "DESCRIPTION",
@@ -145,15 +140,124 @@ abstract class RdapActionBaseTestCase<A extends RdapActionBase> {
         "TITLE",
         title,
         "CODE",
-        String.valueOf(code));
+        String.valueOf(code),
+        "REQUEST_URL",
+        action.requestUrl);
   }
 
-  static JsonFileBuilder jsonFileBuilder() {
-    return new JsonFileBuilder();
+  JsonFileBuilder jsonFileBuilder() {
+    return new JsonFileBuilder(action.requestUrl);
+  }
+
+  private String runAction(String name) {
+    action.requestPath = actionPath + name;
+    action.requestUrl = "https://example.tld" + actionPath + name;
+    action.run();
+    return response.getPayload();
+  }
+
+  JsonElement createTosNotice() {
+    return JsonParser.parseString(
+"""
+{
+  "title": "RDAP Terms of Service",
+  "description": [
+    "By querying our Domain Database, you are agreeing to comply with these terms so please read \
+them carefully.",
+    "Any information provided is 'as is' without any guarantee of accuracy.",
+    "Please do not misuse the Domain Database. It is intended solely for query-based access.",
+    "Don't use the Domain Database to allow, enable, or otherwise support the transmission of mass \
+unsolicited, commercial advertising or solicitations.",
+    "Don't access our Domain Database through the use of high volume, automated electronic \
+processes that send queries or data to the systems of any ICANN-accredited registrar.",
+    "You may only use the information contained in the Domain Database for lawful purposes.",
+    "Do not compile, repackage, disseminate, or otherwise use the information contained in the \
+Domain Database in its entirety, or in any substantial portion, without our prior written \
+permission.",
+    "We may retain certain details about queries to our Domain Database for the purposes of \
+detecting and preventing misuse.",
+    "We reserve the right to restrict or deny your access to the database if we suspect that you \
+have failed to comply with these terms.",
+    "We reserve the right to modify this agreement at any time."
+  ],
+  "links": [
+    {
+      "rel": "self",
+      "href": "https://example.tld/rdap/help/tos",
+      "type": "application/rdap+json",
+      "value": "%REQUEST_URL%"
+    },
+    {
+      "rel": "terms-of-service",
+      "href": "https://www.example.tld/about/rdap/tos.html",
+      "type": "text/html",
+      "value": "%REQUEST_URL%"
+    }
+  ]
+}
+"""
+            .replaceAll("%REQUEST_URL%", action.requestUrl));
+  }
+
+  JsonObject addPermanentBoilerplateNotices(JsonObject jsonObject) {
+    if (!jsonObject.has("notices")) {
+      jsonObject.add("notices", new JsonArray());
+    }
+    JsonArray notices = jsonObject.getAsJsonArray("notices");
+    notices.add(createTosNotice());
+    return jsonObject;
+  }
+
+  JsonObject addDomainBoilerplateNotices(JsonObject jsonObject) {
+    addPermanentBoilerplateNotices(jsonObject);
+    JsonArray notices = jsonObject.getAsJsonArray("notices");
+    notices.add(
+        JsonParser.parseString(
+"""
+{
+  "title": "Status Codes",
+  "description": [
+    "For more information on domain status codes, please visit https://icann.org/epp"
+  ],
+  "links": [
+    {
+      "rel": "glossary",
+      "href": "https://icann.org/epp",
+      "type": "text/html",
+      "value": "%REQUEST_URL%"
+    }
+  ]
+}
+"""
+                .replaceAll("%REQUEST_URL%", action.requestUrl)));
+    notices.add(
+        JsonParser.parseString(
+"""
+{
+  "title": "RDDS Inaccuracy Complaint Form",
+  "description": [
+    "URL of the ICANN RDDS Inaccuracy Complaint Form: https://icann.org/wicf"
+  ],
+  "links": [
+    {
+      "rel": "help",
+      "href": "https://icann.org/wicf",
+      "type": "text/html",
+      "value": "%REQUEST_URL%"
+    }
+  ]
+}
+"""
+                .replaceAll("%REQUEST_URL%", action.requestUrl)));
+    return jsonObject;
   }
 
   protected static final class JsonFileBuilder {
     private final HashMap<String, String> substitutions = new HashMap<>();
+
+    private JsonFileBuilder(String requestUrl) {
+      substitutions.put("REQUEST_URL", requestUrl);
+    }
 
     public JsonObject load(String filename) {
       return RdapTestHelper.loadJsonFile(filename, substitutions);
@@ -162,6 +266,14 @@ abstract class RdapActionBaseTestCase<A extends RdapActionBase> {
     public JsonFileBuilder put(String key, String value) {
       checkArgument(
           substitutions.put(key, value) == null, "substitutions already had key of %s", key);
+      return this;
+    }
+
+    public JsonFileBuilder putAll(String... keysAndValues) {
+      checkArgument(keysAndValues.length % 2 == 0);
+      for (int i = 0; i < keysAndValues.length; i += 2) {
+        put(keysAndValues[i], keysAndValues[i + 1]);
+      }
       return this;
     }
 
@@ -186,9 +298,13 @@ abstract class RdapActionBaseTestCase<A extends RdapActionBase> {
     }
 
     JsonFileBuilder addNameserver(String name, String handle) {
+      return addNameserver(Idn.toASCII(name), name, handle);
+    }
+
+    JsonFileBuilder addNameserver(String punycodeName, String unicodeName, String handle) {
       return putNext(
-          "NAMESERVER_NAME_", Idn.toASCII(name),
-          "NAMESERVER_UNICODE_NAME_", name,
+          "NAMESERVER_NAME_", punycodeName,
+          "NAMESERVER_UNICODE_NAME_", unicodeName,
           "NAMESERVER_HANDLE_", handle);
     }
 
@@ -196,8 +312,15 @@ abstract class RdapActionBaseTestCase<A extends RdapActionBase> {
       return putNext("REGISTRAR_FULL_NAME_", fullName);
     }
 
-    JsonFileBuilder addContact(String handle) {
-      return putNext("CONTACT_HANDLE_", handle);
+    JsonFileBuilder addFullRegistrar(
+        String handle, @Nullable String fullName, String status, @Nullable String address) {
+      if (fullName != null) {
+        putNext("REGISTRAR_FULLNAME_", fullName);
+      }
+      if (address != null) {
+        putNext("REGISTRAR_ADDRESS_", address);
+      }
+      return putNext("REGISTRAR_HANDLE_", handle, "STATUS_", status);
     }
 
     JsonFileBuilder setNextQuery(String nextQuery) {

@@ -32,9 +32,14 @@ import static google.registry.util.DateTimeUtils.END_OF_TIME;
 import static google.registry.util.DateTimeUtils.earliestOf;
 import static google.registry.util.DateTimeUtils.isBeforeOrAt;
 import static google.registry.util.DateTimeUtils.leapSafeAddYears;
+import static google.registry.util.DateTimeUtils.plusYears;
+import static google.registry.util.DateTimeUtils.toDateTime;
+import static google.registry.util.DateTimeUtils.toInstant;
 import static google.registry.util.DomainNameUtils.canonicalizeHostname;
 import static google.registry.util.DomainNameUtils.getTldFromDomainName;
 import static google.registry.util.PreconditionsUtils.checkArgumentNotNull;
+import static java.time.ZoneOffset.UTC;
+import static java.time.temporal.ChronoUnit.YEARS;
 
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedSet;
@@ -43,19 +48,21 @@ import com.google.common.collect.Sets;
 import com.google.gson.annotations.Expose;
 import google.registry.flows.ResourceFlowUtils;
 import google.registry.model.EppResource;
-import google.registry.model.EppResource.ResourceWithTransferData;
 import google.registry.model.billing.BillingRecurrence;
-import google.registry.model.contact.Contact;
+import google.registry.model.billing.VKeyConverter_BillingRecurrence;
 import google.registry.model.domain.launch.LaunchNotice;
 import google.registry.model.domain.rgp.GracePeriodStatus;
 import google.registry.model.domain.secdns.DomainDsData;
 import google.registry.model.domain.token.AllocationToken;
 import google.registry.model.domain.token.AllocationToken.TokenType;
+import google.registry.model.domain.token.VKeyConverter_AllocationToken;
 import google.registry.model.eppcommon.StatusValue;
 import google.registry.model.host.Host;
 import google.registry.model.poll.PollMessage;
 import google.registry.model.poll.PollMessage.Autorenew;
 import google.registry.model.poll.PollMessage.OneTime;
+import google.registry.model.poll.VKeyConverter_Autorenew;
+import google.registry.model.poll.VKeyConverter_OneTime;
 import google.registry.model.tld.Tld;
 import google.registry.model.transfer.DomainTransferData;
 import google.registry.model.transfer.TransferStatus;
@@ -65,27 +72,25 @@ import google.registry.tmch.LordnTaskUtils.LordnPhase;
 import google.registry.tmch.NordnUploadAction;
 import google.registry.util.CollectionUtils;
 import google.registry.util.DateTimeUtils;
+import jakarta.persistence.Access;
+import jakarta.persistence.AccessType;
+import jakarta.persistence.AttributeOverride;
+import jakarta.persistence.AttributeOverrides;
+import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
+import jakarta.persistence.Embedded;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.Id;
+import jakarta.persistence.MappedSuperclass;
+import jakarta.persistence.Transient;
+import java.time.Instant;
 import java.util.HashSet;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.function.Predicate;
 import javax.annotation.Nullable;
-import javax.persistence.Access;
-import javax.persistence.AccessType;
-import javax.persistence.AttributeOverride;
-import javax.persistence.AttributeOverrides;
-import javax.persistence.Column;
-import javax.persistence.Embeddable;
-import javax.persistence.Embedded;
-import javax.persistence.EnumType;
-import javax.persistence.Enumerated;
-import javax.persistence.Id;
-import javax.persistence.MappedSuperclass;
-import javax.persistence.Transient;
-import org.hibernate.collection.internal.PersistentSet;
+import org.hibernate.collection.spi.PersistentSet;
 import org.joda.time.DateTime;
-import org.joda.time.Interval;
 
 /**
  * A persistable domain resource including mutable and non-mutable fields.
@@ -97,10 +102,8 @@ import org.joda.time.Interval;
  * @see <a href="https://tools.ietf.org/html/rfc5731">RFC 5731</a>
  */
 @MappedSuperclass
-@Embeddable
 @Access(AccessType.FIELD)
-public class DomainBase extends EppResource
-    implements ResourceWithTransferData<DomainTransferData> {
+public class DomainBase extends EppResource {
 
   /** The max number of years that a domain can be registered for, as set by ICANN policy. */
   public static final int MAX_REGISTRATION_YEARS = 10;
@@ -120,7 +123,7 @@ public class DomainBase extends EppResource
    * from (creationTime, deletionTime) there can only be one domain in the database with this name.
    * However, there can be many domains with the same name and non-overlapping lifetimes.
    *
-   * @invariant domainName == domainName.toLowerCase(Locale.ENGLISH)
+   * <p>Invariant: domainName == domainName.toLowerCase(Locale.ENGLISH)
    */
   @Expose String domainName;
 
@@ -130,12 +133,12 @@ public class DomainBase extends EppResource
   /** References to hosts that are the nameservers for the domain. */
   @Expose @Transient Set<VKey<Host>> nsHosts;
 
-  /** Contacts. */
-  @Expose VKey<Contact> adminContact;
+  /** Contacts keys are kept around for vestigial purposes for now. */
+  @Expose @Nullable String adminContact;
 
-  @Expose VKey<Contact> billingContact;
-  @Expose VKey<Contact> techContact;
-  @Expose VKey<Contact> registrantContact;
+  @Expose @Nullable String billingContact;
+  @Expose @Nullable String techContact;
+  @Expose @Nullable String registrantContact;
 
   /** Authorization info (aka transfer secret) of the domain. */
   @Embedded
@@ -143,6 +146,7 @@ public class DomainBase extends EppResource
     @AttributeOverride(name = "pw.value", column = @Column(name = "auth_info_value")),
     @AttributeOverride(name = "pw.repoId", column = @Column(name = "auth_info_repo_id")),
   })
+  @Nullable
   DomainAuthInfo authInfo;
 
   /** Data used to construct DS records for this domain. */
@@ -189,6 +193,7 @@ public class DomainBase extends EppResource
    * restored, the message should be deleted.
    */
   @Column(name = "deletion_poll_message_id")
+  @Convert(converter = VKeyConverter_OneTime.class)
   VKey<OneTime> deletePollMessage;
 
   /**
@@ -200,6 +205,7 @@ public class DomainBase extends EppResource
    * should be created, and this field should be updated to point to the new one.
    */
   @Column(name = "billing_recurrence_id")
+  @Convert(converter = VKeyConverter_BillingRecurrence.class)
   VKey<BillingRecurrence> autorenewBillingEvent;
 
   /**
@@ -211,6 +217,7 @@ public class DomainBase extends EppResource
    * should be created, and this field should be updated to point to the new one.
    */
   @Column(name = "autorenew_poll_message_id")
+  @Convert(converter = VKeyConverter_Autorenew.class)
   VKey<Autorenew> autorenewPollMessage;
 
   /** The unexpired grace periods for this domain (some of which may not be active yet). */
@@ -272,6 +279,7 @@ public class DomainBase extends EppResource
    */
   @Nullable
   @Column(name = "current_package_token")
+  @Convert(converter = VKeyConverter_AllocationToken.class)
   VKey<AllocationToken> currentBulkToken;
 
   public LordnPhase getLordnPhase() {
@@ -282,8 +290,13 @@ public class DomainBase extends EppResource
     return nullToEmptyImmutableCopy(subordinateHosts);
   }
 
-  public DateTime getRegistrationExpirationTime() {
+  @Deprecated
+  public DateTime getRegistrationExpirationDateTime() {
     return registrationExpirationTime;
+  }
+
+  public Instant getRegistrationExpirationTime() {
+    return toInstant(registrationExpirationTime);
   }
 
   public VKey<OneTime> getDeletePollMessage() {
@@ -321,12 +334,10 @@ public class DomainBase extends EppResource
     return Optional.ofNullable(autorenewEndTime.equals(END_OF_TIME) ? null : autorenewEndTime);
   }
 
-  @Override
   public DomainTransferData getTransferData() {
     return Optional.ofNullable(transferData).orElse(DomainTransferData.EMPTY);
   }
 
-  @Override
   public DateTime getLastTransferTime() {
     return lastTransferTime;
   }
@@ -435,6 +446,11 @@ public class DomainBase extends EppResource
 
   @Override
   public DomainBase cloneProjectedAtTime(final DateTime now) {
+    return cloneDomainProjectedAtTime(this, toInstant(now));
+  }
+
+  @Override
+  public DomainBase cloneProjectedAtInstant(final Instant now) {
     return cloneDomainProjectedAtTime(this, now);
   }
 
@@ -443,9 +459,9 @@ public class DomainBase extends EppResource
    * parallels the logic in {@code DomainTransferApproveFlow} which handles explicit client
    * approvals.
    */
-  static <T extends DomainBase> T cloneDomainProjectedAtTime(T domain, DateTime now) {
+  static <T extends DomainBase> T cloneDomainProjectedAtTime(T domain, Instant now) {
     DomainTransferData transferData = domain.getTransferData();
-    DateTime transferExpirationTime = transferData.getPendingTransferExpirationTime();
+    Instant transferExpirationTime = transferData.getPendingTransferExpirationTime();
 
     // If there's a pending transfer that has expired, handle it.
     if (TransferStatus.PENDING.equals(transferData.getTransferStatus())
@@ -458,7 +474,7 @@ public class DomainBase extends EppResource
       T domainAtTransferTime =
           cloneDomainProjectedAtTime(domain, transferExpirationTime.minusMillis(1));
 
-      DateTime expirationDate = transferData.getTransferredRegistrationExpirationTime();
+      Instant expirationDate = transferData.getTransferredRegistrationExpirationTime();
       if (expirationDate == null) {
         // Extend the registration by the correct number of years from the expiration time
         // that was current on the domain right before the transfer, capped at 10 years from
@@ -477,7 +493,7 @@ public class DomainBase extends EppResource
       Builder builder =
           domainAtTransferTime
               .asBuilder()
-              .setRegistrationExpirationTime(expirationDate)
+              .setRegistrationExpirationTime(toDateTime(expirationDate))
               // Set the speculatively-written new autorenew events as the domain's autorenew
               // events.
               .setAutorenewBillingEvent(transferData.getServerApproveAutorenewEvent())
@@ -491,8 +507,8 @@ public class DomainBase extends EppResource
                 GracePeriod.create(
                     GracePeriodStatus.TRANSFER,
                     domain.getRepoId(),
-                    transferExpirationTime.plus(
-                        Tld.get(domain.getTld()).getTransferGracePeriodLength()),
+                    toDateTime(transferExpirationTime)
+                        .plus(Tld.get(domain.getTld()).getTransferGracePeriodLength()),
                     transferData.getGainingRegistrarId(),
                     transferData.getServerApproveBillingEvent())));
       } else {
@@ -502,32 +518,33 @@ public class DomainBase extends EppResource
       // Set all remaining transfer properties.
       setAutomaticTransferSuccessProperties(builder, transferData);
       builder
-          .setLastEppUpdateTime(transferExpirationTime)
+          .setLastEppUpdateTime(toDateTime(transferExpirationTime))
           .setLastEppUpdateRegistrarId(transferData.getGainingRegistrarId());
       // Finish projecting to now.
-      return (T) builder.build().cloneProjectedAtTime(now);
+      return (T) builder.build().cloneProjectedAtInstant(now);
     }
 
-    Optional<DateTime> newLastEppUpdateTime = Optional.empty();
+    Optional<Instant> newLastEppUpdateTime = Optional.empty();
 
     // There is no transfer. Do any necessary autorenews for active domains.
 
     Builder builder = domain.asBuilder();
     if (isBeforeOrAt(domain.getRegistrationExpirationTime(), now)
-        && END_OF_TIME.equals(domain.getDeletionTime())) {
+        && END_OF_TIME.equals(domain.getDeletionDateTime())) {
       // Autorenew by the number of years between the old expiration time and now.
-      DateTime lastAutorenewTime =
+      Instant lastAutorenewTime =
           leapSafeAddYears(
               domain.getRegistrationExpirationTime(),
-              new Interval(domain.getRegistrationExpirationTime(), now).toPeriod().getYears());
-      DateTime newExpirationTime = lastAutorenewTime.plusYears(1);
+              YEARS.between(domain.getRegistrationExpirationTime().atZone(UTC), now.atZone(UTC)));
+      Instant newExpirationTime = plusYears(lastAutorenewTime, 1);
       builder
-          .setRegistrationExpirationTime(newExpirationTime)
+          .setRegistrationExpirationTime(toDateTime(newExpirationTime))
           .addGracePeriod(
               GracePeriod.createForRecurrence(
                   GracePeriodStatus.AUTO_RENEW,
                   domain.getRepoId(),
-                  lastAutorenewTime.plus(Tld.get(domain.getTld()).getAutoRenewGracePeriodLength()),
+                  toDateTime(lastAutorenewTime)
+                      .plus(Tld.get(domain.getTld()).getAutoRenewGracePeriodLength()),
                   domain.getCurrentSponsorRegistrarId(),
                   domain.getAutorenewBillingEvent()));
       newLastEppUpdateTime = Optional.of(lastAutorenewTime);
@@ -539,7 +556,7 @@ public class DomainBase extends EppResource
     for (GracePeriod gracePeriod : almostBuilt.getGracePeriods()) {
       if (isBeforeOrAt(gracePeriod.getExpirationTime(), now)) {
         builder.removeGracePeriod(gracePeriod);
-        if (!newLastEppUpdateTime.isPresent()
+        if (newLastEppUpdateTime.isEmpty()
             || isBeforeOrAt(newLastEppUpdateTime.get(), gracePeriod.getExpirationTime())) {
           newLastEppUpdateTime = Optional.of(gracePeriod.getExpirationTime());
         }
@@ -550,10 +567,10 @@ public class DomainBase extends EppResource
     // id, so we have to do the comparison instead of having one variable just storing the most
     // recent time.
     if (newLastEppUpdateTime.isPresent()) {
-      if (domain.getLastEppUpdateTime() == null
+      if (domain.getLastEppUpdateDateTime() == null
           || newLastEppUpdateTime.get().isAfter(domain.getLastEppUpdateTime())) {
         builder
-            .setLastEppUpdateTime(newLastEppUpdateTime.get())
+            .setLastEppUpdateTime(toDateTime(newLastEppUpdateTime.get()))
             .setLastEppUpdateRegistrarId(domain.getCurrentSponsorRegistrarId());
       }
     }
@@ -566,8 +583,8 @@ public class DomainBase extends EppResource
   }
 
   /** Return what the expiration time would be if the given number of years were added to it. */
-  public static DateTime extendRegistrationWithCap(
-      DateTime now, DateTime currentExpirationTime, @Nullable Integer extendedRegistrationYears) {
+  public static Instant extendRegistrationWithCap(
+      Instant now, Instant currentExpirationTime, @Nullable Integer extendedRegistrationYears) {
     // We must cap registration at the max years (aka 10), even if that truncates the last year.
     return earliestOf(
         leapSafeAddYears(
@@ -577,106 +594,20 @@ public class DomainBase extends EppResource
 
   /** Loads and returns the fully qualified host names of all linked nameservers. */
   public ImmutableSortedSet<String> loadNameserverHostNames() {
-    return tm().transact(
+    return tm().reTransact(
             () ->
                 tm().loadByKeys(getNameservers()).values().stream()
                     .map(Host::getHostName)
                     .collect(toImmutableSortedSet(Ordering.natural())));
   }
 
-  /** A key to the registrant who registered this domain. */
-  public VKey<Contact> getRegistrant() {
-    return registrantContact;
-  }
-
-  public VKey<Contact> getAdminContact() {
-    return adminContact;
-  }
-
-  public VKey<Contact> getBillingContact() {
-    return billingContact;
-  }
-
-  public VKey<Contact> getTechContact() {
-    return techContact;
-  }
-
-  /** Associated contacts for the domain (other than registrant). */
-  public ImmutableSet<DesignatedContact> getContacts() {
-    return getAllContacts(false);
-  }
-
+  @Nullable
   public DomainAuthInfo getAuthInfo() {
     return authInfo;
   }
 
-  /** Returns all referenced contacts from this domain. */
-  public ImmutableSet<VKey<Contact>> getReferencedContacts() {
-    return nullToEmptyImmutableCopy(getAllContacts(true)).stream()
-        .map(DesignatedContact::getContactKey)
-        .filter(Objects::nonNull)
-        .collect(toImmutableSet());
-  }
-
-  private ImmutableSet<DesignatedContact> getAllContacts(boolean includeRegistrant) {
-    ImmutableSet.Builder<DesignatedContact> builder = new ImmutableSet.Builder<>();
-    if (includeRegistrant && registrantContact != null) {
-      builder.add(DesignatedContact.create(DesignatedContact.Type.REGISTRANT, registrantContact));
-    }
-    if (adminContact != null) {
-      builder.add(DesignatedContact.create(DesignatedContact.Type.ADMIN, adminContact));
-    }
-    if (billingContact != null) {
-      builder.add(DesignatedContact.create(DesignatedContact.Type.BILLING, billingContact));
-    }
-    if (techContact != null) {
-      builder.add(DesignatedContact.create(DesignatedContact.Type.TECH, techContact));
-    }
-    return builder.build();
-  }
-
   public String getTld() {
     return tld;
-  }
-
-  /**
-   * Sets the individual contact fields from {@code contacts}.
-   *
-   * <p>The registrant field is only set if {@code includeRegistrant} is true, as this field needs
-   * to be set in some circumstances but not in others.
-   */
-  void setContactFields(Set<DesignatedContact> contacts, boolean includeRegistrant) {
-    // Set the individual contact fields.
-    billingContact = techContact = adminContact = null;
-    if (includeRegistrant) {
-      registrantContact = null;
-    }
-    HashSet<DesignatedContact.Type> contactsDiscovered = new HashSet<>();
-    for (DesignatedContact contact : contacts) {
-      checkArgument(
-          !contactsDiscovered.contains(contact.getType()),
-          "Duplicate contact type %s in designated contact set.",
-          contact.getType());
-      contactsDiscovered.add(contact.getType());
-      switch (contact.getType()) {
-        case BILLING:
-          billingContact = contact.getContactKey();
-          break;
-        case TECH:
-          techContact = contact.getContactKey();
-          break;
-        case ADMIN:
-          adminContact = contact.getContactKey();
-          break;
-        case REGISTRANT:
-          if (includeRegistrant) {
-            registrantContact = contact.getContactKey();
-          }
-          break;
-        default:
-          throw new IllegalArgumentException("Unknown contact resource type: " + contact.getType());
-      }
-    }
   }
 
   @Override
@@ -684,10 +615,6 @@ public class DomainBase extends EppResource
     throw new UnsupportedOperationException(
         "DomainBase is not an actual persisted entity you can create a key to; use Domain instead");
   }
-
-  /** Predicate to determine if a given {@link DesignatedContact} is the registrant. */
-  static final Predicate<DesignatedContact> IS_REGISTRANT =
-      (DesignatedContact contact) -> DesignatedContact.Type.REGISTRANT.equals(contact.type);
 
   /** An override of {@link EppResource#asBuilder} with tighter typing. */
   @Override
@@ -697,7 +624,7 @@ public class DomainBase extends EppResource
 
   /** A builder for constructing {@link Domain}, since it is immutable. */
   public static class Builder<T extends DomainBase, B extends Builder<T, B>>
-      extends EppResource.Builder<T, B> implements BuilderWithTransferData<DomainTransferData, B> {
+      extends EppResource.Builder<T, B> {
 
     public Builder() {}
 
@@ -722,7 +649,6 @@ public class DomainBase extends EppResource
       instance.autorenewEndTime = firstNonNull(getInstance().autorenewEndTime, END_OF_TIME);
 
       checkArgumentNotNull(emptyToNull(instance.domainName), "Missing domainName");
-      checkArgumentNotNull(instance.getRegistrant(), "Missing registrant");
       instance.tld = getTldFromDomainName(instance.domainName);
 
       T newDomain = super.build();
@@ -751,12 +677,6 @@ public class DomainBase extends EppResource
     public B setDsData(ImmutableSet<DomainDsData> dsData) {
       getInstance().dsData = dsData;
       getInstance().resetUpdateTimestamp();
-      return thisCastToDerived();
-    }
-
-    public B setRegistrant(VKey<Contact> registrant) {
-      // Set the registrant field specifically.
-      getInstance().registrantContact = registrant;
       return thisCastToDerived();
     }
 
@@ -793,26 +713,6 @@ public class DomainBase extends EppResource
     public B removeNameservers(ImmutableSet<VKey<Host>> nameservers) {
       return setNameservers(
           ImmutableSet.copyOf(difference(getInstance().getNameservers(), nameservers)));
-    }
-
-    public B setContacts(DesignatedContact contact) {
-      return setContacts(ImmutableSet.of(contact));
-    }
-
-    public B setContacts(ImmutableSet<DesignatedContact> contacts) {
-      checkArgument(contacts.stream().noneMatch(IS_REGISTRANT), "Registrant cannot be a contact");
-
-      // Set the individual fields.
-      getInstance().setContactFields(contacts, false);
-      return thisCastToDerived();
-    }
-
-    public B addContacts(ImmutableSet<DesignatedContact> contacts) {
-      return setContacts(ImmutableSet.copyOf(Sets.union(getInstance().getContacts(), contacts)));
-    }
-
-    public B removeContacts(ImmutableSet<DesignatedContact> contacts) {
-      return setContacts(ImmutableSet.copyOf(difference(getInstance().getContacts(), contacts)));
     }
 
     public B setLaunchNotice(LaunchNotice launchNotice) {
@@ -902,13 +802,11 @@ public class DomainBase extends EppResource
       return thisCastToDerived();
     }
 
-    @Override
     public B setTransferData(DomainTransferData transferData) {
       getInstance().transferData = transferData;
       return thisCastToDerived();
     }
 
-    @Override
     public B setLastTransferTime(DateTime lastTransferTime) {
       getInstance().lastTransferTime = lastTransferTime;
       return thisCastToDerived();
@@ -931,6 +829,36 @@ public class DomainBase extends EppResource
           "The currentBulkToken must have a BULK_PRICING TokenType");
       getInstance().currentBulkToken = currentBulkToken;
       return thisCastToDerived();
+    }
+
+    public B copyFrom(DomainBase domainBase) {
+      getInstance().copyUpdateTimestamp(domainBase);
+      return setAuthInfo(domainBase.getAuthInfo())
+          .setAutorenewPollMessage(domainBase.getAutorenewPollMessage())
+          .setAutorenewBillingEvent(domainBase.getAutorenewBillingEvent())
+          .setAutorenewEndTime(domainBase.getAutorenewEndTime())
+          .setCreationRegistrarId(domainBase.getCreationRegistrarId())
+          .setCreationTime(domainBase.getCreationTime())
+          .setDomainName(domainBase.getDomainName())
+          .setDeletePollMessage(domainBase.getDeletePollMessage())
+          .setDsData(domainBase.getDsData())
+          .setDeletionTime(domainBase.getDeletionDateTime())
+          .setGracePeriods(domainBase.getGracePeriods())
+          .setIdnTableName(domainBase.getIdnTableName())
+          .setLastTransferTime(domainBase.getLastTransferTime())
+          .setLaunchNotice(domainBase.getLaunchNotice())
+          .setLastEppUpdateRegistrarId(domainBase.getLastEppUpdateRegistrarId())
+          .setLastEppUpdateTime(domainBase.getLastEppUpdateDateTime())
+          .setNameservers(domainBase.getNameservers())
+          .setPersistedCurrentSponsorRegistrarId(domainBase.getPersistedCurrentSponsorRegistrarId())
+          .setRegistrationExpirationTime(domainBase.getRegistrationExpirationDateTime())
+          .setRepoId(domainBase.getRepoId())
+          .setSmdId(domainBase.getSmdId())
+          .setSubordinateHosts(domainBase.getSubordinateHosts())
+          .setStatusValues(domainBase.getStatusValues())
+          .setTransferData(domainBase.getTransferData())
+          .setLordnPhase(domainBase.getLordnPhase())
+          .setCurrentBulkToken(domainBase.getCurrentBulkToken().orElse(null));
     }
   }
 }

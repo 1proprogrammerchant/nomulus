@@ -15,7 +15,7 @@
 package google.registry.flows;
 
 import static com.google.common.truth.Truth.assertThat;
-import static google.registry.model.EppResourceUtils.loadByForeignKey;
+import static google.registry.model.ForeignKeyUtils.loadResource;
 import static google.registry.model.eppoutput.Result.Code.SUCCESS;
 import static google.registry.testing.DatabaseHelper.createTld;
 import static google.registry.testing.DatabaseHelper.createTlds;
@@ -91,14 +91,6 @@ class EppLifecycleHostTest extends EppTestCase {
     createTld("example");
     assertThatLoginSucceeds("NewRegistrar", "foo-BAR2");
     // Create the fakesite domain.
-    assertThatCommand("contact_create_sh8013.xml")
-        .atTime("2000-06-01T00:00:00Z")
-        .hasResponse(
-            "contact_create_response_sh8013.xml",
-            ImmutableMap.of("CRDATE", "2000-06-01T00:00:00Z"));
-    assertThatCommand("contact_create_jd1234.xml")
-        .atTime("2000-06-01T00:01:00Z")
-        .hasResponse("contact_create_response_jd1234.xml");
     assertThatCommand("domain_create_fakesite_no_nameservers.xml")
         .atTime("2000-06-01T00:04:00Z")
         .hasResponse(
@@ -141,15 +133,6 @@ class EppLifecycleHostTest extends EppTestCase {
     createTlds("bar.foo.tld", "foo.tld", "tld");
 
     assertThatLoginSucceeds("NewRegistrar", "foo-BAR2");
-
-    assertThatCommand("contact_create_sh8013.xml")
-        .atTime("2000-06-01T00:00:00Z")
-        .hasResponse(
-            "contact_create_response_sh8013.xml",
-            ImmutableMap.of("CRDATE", "2000-06-01T00:00:00Z"));
-    assertThatCommand("contact_create_jd1234.xml")
-        .atTime("2000-06-01T00:01:00Z")
-        .hasResponse("contact_create_response_jd1234.xml");
 
     // Create domain example.bar.foo.tld
     assertThatCommand(
@@ -212,9 +195,9 @@ class EppLifecycleHostTest extends EppTestCase {
     DateTime timeAfterCreates = DateTime.parse("2000-06-01T00:06:00Z");
 
     Host exampleBarFooTldHost =
-        loadByForeignKey(Host.class, "ns1.example.bar.foo.tld", timeAfterCreates).get();
+        loadResource(Host.class, "ns1.example.bar.foo.tld", timeAfterCreates).get();
     Domain exampleBarFooTldDomain =
-        loadByForeignKey(Domain.class, "example.bar.foo.tld", timeAfterCreates).get();
+        loadResource(Domain.class, "example.bar.foo.tld", timeAfterCreates).get();
     assertAboutHosts()
         .that(exampleBarFooTldHost)
         .hasSuperordinateDomain(exampleBarFooTldDomain.createVKey());
@@ -222,16 +205,16 @@ class EppLifecycleHostTest extends EppTestCase {
         .containsExactly("ns1.example.bar.foo.tld");
 
     Host exampleFooTldHost =
-        loadByForeignKey(Host.class, "ns1.example.foo.tld", timeAfterCreates).get();
+        loadResource(Host.class, "ns1.example.foo.tld", timeAfterCreates).get();
     Domain exampleFooTldDomain =
-        loadByForeignKey(Domain.class, "example.foo.tld", timeAfterCreates).get();
+        loadResource(Domain.class, "example.foo.tld", timeAfterCreates).get();
     assertAboutHosts()
         .that(exampleFooTldHost)
         .hasSuperordinateDomain(exampleFooTldDomain.createVKey());
     assertThat(exampleFooTldDomain.getSubordinateHosts()).containsExactly("ns1.example.foo.tld");
 
-    Host exampleTldHost = loadByForeignKey(Host.class, "ns1.example.tld", timeAfterCreates).get();
-    Domain exampleTldDomain = loadByForeignKey(Domain.class, "example.tld", timeAfterCreates).get();
+    Host exampleTldHost = loadResource(Host.class, "ns1.example.tld", timeAfterCreates).get();
+    Domain exampleTldDomain = loadResource(Domain.class, "example.tld", timeAfterCreates).get();
     assertAboutHosts().that(exampleTldHost).hasSuperordinateDomain(exampleTldDomain.createVKey());
     assertThat(exampleTldDomain.getSubordinateHosts()).containsExactly("ns1.example.tld");
 

@@ -30,8 +30,8 @@ import com.beust.jcommander.Parameter;
 import com.beust.jcommander.Parameters;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Streams;
-import google.registry.config.RegistryEnvironment;
 import google.registry.model.registrar.Registrar;
+import google.registry.util.RegistryEnvironment;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -81,9 +81,7 @@ final class CreateRegistrarCommand extends CreateOrUpdateRegistrarCommand
           clientId);
     }
     checkState(
-        !Registrar.loadByRegistrarId(clientId).isPresent(),
-        "Registrar %s already exists",
-        clientId);
+        Registrar.loadByRegistrarId(clientId).isEmpty(), "Registrar %s already exists", clientId);
     List<Registrar> collisions =
         Streams.stream(Registrar.loadAll())
             .filter(registrar -> normalizeRegistrarId(registrar.getRegistrarId()).equals(clientId))
@@ -107,7 +105,7 @@ final class CreateRegistrarCommand extends CreateOrUpdateRegistrarCommand
         "Cannot add allowed TLDs when creating a REAL registrar in a production environment."
             + " Please create the registrar without allowed TLDs, then use `nomulus"
             + " registrar_contact` to create a registrar contact for it that is visible as the"
-            + " abuse contact in WHOIS. Then use `nomulus update_registrar` to add the allowed"
+            + " abuse contact in RDAP. Then use `nomulus update_registrar` to add the allowed"
             + " TLDs.");
   }
 

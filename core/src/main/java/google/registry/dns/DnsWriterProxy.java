@@ -20,8 +20,8 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.flogger.FluentLogger;
 import google.registry.dns.writer.DnsWriter;
 import google.registry.model.tld.Tld;
+import jakarta.inject.Inject;
 import java.util.Map;
-import javax.inject.Inject;
 
 /** Proxy for retrieving {@link DnsWriter} implementations. */
 public final class DnsWriterProxy {
@@ -38,7 +38,7 @@ public final class DnsWriterProxy {
   /**
    * Returns the instance of {@link DnsWriter} by class name.
    *
-   * If the DnsWriter doesn't belong to this TLD, will return null.
+   * <p>If the DnsWriter doesn't belong to this TLD, will return null.
    */
   public DnsWriter getByClassNameForTld(String className, String tld) {
     if (!Tld.get(tld).getDnsWriters().contains(className)) {

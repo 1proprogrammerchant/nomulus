@@ -24,8 +24,9 @@ import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.flogger.FluentLogger;
 import com.google.common.util.concurrent.UncheckedExecutionException;
 import google.registry.model.server.Lock;
-import google.registry.util.AppEngineTimeLimiter;
 import google.registry.util.Clock;
+import google.registry.util.TimeLimiter;
+import jakarta.inject.Inject;
 import java.util.HashSet;
 import java.util.Optional;
 import java.util.Set;
@@ -34,7 +35,6 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import javax.annotation.Nullable;
-import javax.inject.Inject;
 import org.joda.time.DateTime;
 import org.joda.time.Duration;
 
@@ -82,7 +82,7 @@ public class LockHandlerImpl implements LockHandler {
     DateTime startTime = clock.nowUtc();
     String sanitizedTld = Strings.emptyToNull(tld);
     try {
-      return AppEngineTimeLimiter.create()
+      return TimeLimiter.create()
           .callWithTimeout(
               new LockingCallable(callable, lockAcquirer, sanitizedTld, leaseLength, lockNames),
               leaseLength.minus(LOCK_TIMEOUT_FUDGE).getMillis(),
@@ -147,7 +147,7 @@ public class LockHandlerImpl implements LockHandler {
       try {
         for (String lockName : lockNames) {
           Optional<Lock> lock = lockAcquirer.acquireLock(lockName, tld, leaseLength);
-          if (!lock.isPresent()) {
+          if (lock.isEmpty()) {
             logger.atInfo().log("Couldn't acquire lock named: %s for TLD %s.", lockName, tld);
             return false;
           }

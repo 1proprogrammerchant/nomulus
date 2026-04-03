@@ -23,29 +23,32 @@ import google.registry.model.domain.GracePeriod.GracePeriodHistory;
 import google.registry.model.domain.secdns.DomainDsData;
 import google.registry.model.domain.secdns.DomainDsDataHistory;
 import google.registry.model.host.Host;
+import google.registry.model.host.VKeyConverter_Host;
 import google.registry.model.reporting.DomainTransactionRecord;
 import google.registry.model.reporting.HistoryEntry;
+import google.registry.persistence.EntityCallbacksListener.RecursivePostLoad;
 import google.registry.persistence.VKey;
+import jakarta.persistence.Access;
+import jakarta.persistence.AccessType;
+import jakarta.persistence.AttributeOverride;
+import jakarta.persistence.AttributeOverrides;
+import jakarta.persistence.CascadeType;
+import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
+import jakarta.persistence.ElementCollection;
+import jakarta.persistence.Embedded;
+import jakarta.persistence.Entity;
+import jakarta.persistence.FetchType;
+import jakarta.persistence.Index;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.JoinColumns;
+import jakarta.persistence.JoinTable;
+import jakarta.persistence.OneToMany;
+import jakarta.persistence.Table;
 import java.util.HashSet;
 import java.util.Optional;
 import java.util.Set;
 import javax.annotation.Nullable;
-import javax.persistence.Access;
-import javax.persistence.AccessType;
-import javax.persistence.AttributeOverride;
-import javax.persistence.AttributeOverrides;
-import javax.persistence.CascadeType;
-import javax.persistence.Column;
-import javax.persistence.ElementCollection;
-import javax.persistence.Entity;
-import javax.persistence.FetchType;
-import javax.persistence.Index;
-import javax.persistence.JoinColumn;
-import javax.persistence.JoinColumns;
-import javax.persistence.JoinTable;
-import javax.persistence.OneToMany;
-import javax.persistence.PostLoad;
-import javax.persistence.Table;
 import org.hibernate.Hibernate;
 
 /**
@@ -69,10 +72,10 @@ public class DomainHistory extends HistoryEntry {
 
   // Store DomainBase instead of Domain, so we don't pick up its @Id
   // @Nullable for the sake of pre-Registry-3.0 history objects
-  @Nullable DomainBase resource;
+  @Nullable @Embedded EmbeddedDomainBase resource;
 
   @Override
-  protected DomainBase getResource() {
+  protected EmbeddedDomainBase getResource() {
     return resource;
   }
 
@@ -91,12 +94,15 @@ public class DomainHistory extends HistoryEntry {
   @ElementCollection
   @JoinTable(
       name = "DomainHistoryHost",
-      indexes =
-          @Index(
-              columnList =
-                  "domain_history_history_revision_id,domain_history_domain_repo_id,host_repo_id",
-              unique = true))
+      indexes = {
+        @Index(columnList = "domain_history_domain_repo_id"),
+        @Index(
+            columnList =
+                "domain_history_history_revision_id,domain_history_domain_repo_id,host_repo_id",
+            unique = true)
+      })
   @Column(name = "host_repo_id")
+  @Convert(converter = VKeyConverter_Host.class)
   Set<VKey<Host>> nsHosts;
 
   @OneToMany(cascade = CascadeType.ALL, fetch = FetchType.EAGER, orphanRemoval = true)
@@ -198,9 +204,8 @@ public class DomainHistory extends HistoryEntry {
     return period;
   }
 
-  @Override
-  @PostLoad
-  protected void postLoad() {
+  @RecursivePostLoad
+  public void domainHistoryPostLoad() {
     // TODO(b/188044616): Determine why Eager loading doesn't work here.
     Hibernate.initialize(domainTransactionRecords);
     Hibernate.initialize(nsHosts);
@@ -216,7 +221,6 @@ public class DomainHistory extends HistoryEntry {
       resource.dsData =
           dsDataHistories.stream().map(DomainDsData::create).collect(toImmutableSet());
     }
-    processResourcePostLoad();
   }
 
   private static void fillAuxiliaryFieldsFromDomain(DomainHistory domainHistory) {
@@ -253,7 +257,7 @@ public class DomainHistory extends HistoryEntry {
     }
 
     public Builder setDomain(DomainBase domainBase) {
-      getInstance().resource = domainBase;
+      getInstance().resource = new EmbeddedDomainBase.Builder().copyFrom(domainBase).build();
       return setRepoId(domainBase);
     }
 

@@ -24,20 +24,20 @@ import google.registry.request.Action;
 import google.registry.request.JsonActionRunner;
 import google.registry.request.JsonActionRunner.JsonAction;
 import google.registry.request.auth.Auth;
+import jakarta.inject.Inject;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
-import javax.inject.Inject;
 
 /**
  * A servlet that verifies a registrar's OTE status. Note that this is eventually consistent, so
  * OT&amp;E commands that have been run just previously to verification may not be picked up yet.
  */
 @Action(
-    service = Action.Service.TOOLS,
+    service = Action.Service.BACKEND,
     path = VerifyOteAction.PATH,
     method = Action.Method.POST,
-    auth = Auth.AUTH_API_ADMIN)
+    auth = Auth.AUTH_ADMIN)
 public class VerifyOteAction implements Runnable, JsonAction {
 
   public static final String PATH = "/_dr/admin/verifyOte";

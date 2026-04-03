@@ -24,17 +24,19 @@ import google.registry.rdap.RdapObjectClasses.HelpResponse;
 import google.registry.request.Action;
 import google.registry.request.HttpException.NotFoundException;
 import google.registry.request.auth.Auth;
+import jakarta.inject.Inject;
 import java.util.Optional;
-import javax.inject.Inject;
 
-/** RDAP (new WHOIS) action for help requests. */
+/** RDAP action for help requests. */
 @Action(
     service = Action.Service.PUBAPI,
-    path = "/rdap/help",
+    path = RdapHelpAction.PATH,
     method = {GET, HEAD},
     isPrefix = true,
     auth = Auth.AUTH_PUBLIC)
 public class RdapHelpAction extends RdapActionBase {
+
+  public static final String PATH = "/rdap/help";
 
   /** The help path for the RDAP terms of service. */
   public static final String TOS_PATH = "/tos";

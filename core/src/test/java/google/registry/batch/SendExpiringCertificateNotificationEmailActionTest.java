@@ -18,7 +18,7 @@ import static com.google.common.truth.Truth.assertThat;
 import static google.registry.persistence.transaction.JpaTransactionManagerExtension.makeRegistrar1;
 import static google.registry.testing.DatabaseHelper.loadByEntity;
 import static google.registry.testing.DatabaseHelper.persistResource;
-import static google.registry.testing.DatabaseHelper.persistSimpleResources;
+import static google.registry.testing.DatabaseHelper.persistResources;
 import static google.registry.util.DateTimeUtils.START_OF_TIME;
 import static org.apache.http.HttpStatus.SC_OK;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -32,6 +32,7 @@ import com.google.common.collect.ImmutableSortedMap;
 import google.registry.batch.SendExpiringCertificateNotificationEmailAction.CertificateType;
 import google.registry.batch.SendExpiringCertificateNotificationEmailAction.RegistrarInfo;
 import google.registry.flows.certs.CertificateChecker;
+import google.registry.groups.GmailClient;
 import google.registry.model.registrar.Registrar;
 import google.registry.model.registrar.RegistrarAddress;
 import google.registry.model.registrar.RegistrarPoc;
@@ -41,11 +42,10 @@ import google.registry.persistence.transaction.JpaTestExtensions.JpaIntegrationT
 import google.registry.testing.FakeClock;
 import google.registry.testing.FakeResponse;
 import google.registry.util.SelfSignedCaCertificate;
-import google.registry.util.SendEmailService;
+import jakarta.mail.internet.InternetAddress;
 import java.security.cert.X509Certificate;
 import java.util.Optional;
 import javax.annotation.Nullable;
-import javax.mail.internet.InternetAddress;
 import org.joda.time.DateTime;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -55,18 +55,15 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 class SendExpiringCertificateNotificationEmailActionTest {
 
   private static final String EXPIRATION_WARNING_EMAIL_BODY_TEXT =
-      " Dear %1$s,\n"
-          + '\n'
-          + "We would like to inform you that your %2$s certificate will expire at %3$s."
-          + '\n'
-          + " Kind update your account using the following steps: "
-          + '\n'
-          + "  1. Navigate to support and login using your %4$s@registry.example credentials.\n"
-          + "  2. Click Settings -> Privacy on the top left corner.\n"
-          + "  3. Click Edit and enter certificate string."
-          + "  3. Click Save"
-          + "Regards,"
-          + "Example Registry";
+      """
+       Dear %1$s,
+
+      We would like to inform you that your %2$s certificate will expire at %3$s.
+       Kind update your account using the following steps:
+        1. Navigate to support and login using your %4$s@registry.example credentials.
+        2. Click Settings -> Privacy on the top left corner.
+        3. Click Edit and enter certificate string.  3. Click SaveRegards,Example Registry\
+      """;
 
   private static final String EXPIRATION_WARNING_EMAIL_SUBJECT_TEXT = "Expiration Warning Email";
 
@@ -75,7 +72,7 @@ class SendExpiringCertificateNotificationEmailActionTest {
       new JpaTestExtensions.Builder().buildIntegrationTestExtension();
 
   private final FakeClock clock = new FakeClock(DateTime.parse("2021-05-24T20:21:22Z"));
-  private final SendEmailService sendEmailService = mock(SendEmailService.class);
+  private final GmailClient sendEmailService = mock(GmailClient.class);
   private CertificateChecker certificateChecker;
   private SendExpiringCertificateNotificationEmailAction action;
   private Registrar sampleRegistrar;
@@ -98,7 +95,6 @@ class SendExpiringCertificateNotificationEmailActionTest {
         new SendExpiringCertificateNotificationEmailAction(
             EXPIRATION_WARNING_EMAIL_BODY_TEXT,
             EXPIRATION_WARNING_EMAIL_SUBJECT_TEXT,
-            new InternetAddress("test@example.com"),
             sendEmailService,
             certificateChecker,
             response);
@@ -225,10 +221,10 @@ class SendExpiringCertificateNotificationEmailActionTest {
                 .setPhoneNumber("+1.3105551213")
                 .setFaxNumber("+1.3105551213")
                 .setTypes(ImmutableSet.of(RegistrarPoc.Type.TECH))
-                .setVisibleInWhoisAsAdmin(true)
-                .setVisibleInWhoisAsTech(false)
+                .setVisibleInRdapAsAdmin(true)
+                .setVisibleInRdapAsTech(false)
                 .build());
-    persistSimpleResources(contacts);
+    persistResources(contacts);
     RuntimeException thrown =
         assertThrows(
             RuntimeException.class,
@@ -515,8 +511,8 @@ class SendExpiringCertificateNotificationEmailActionTest {
                 .setPhoneNumber("+1.3105551213")
                 .setFaxNumber("+1.3105551213")
                 .setTypes(ImmutableSet.of(RegistrarPoc.Type.TECH))
-                .setVisibleInWhoisAsAdmin(true)
-                .setVisibleInWhoisAsTech(false)
+                .setVisibleInRdapAsAdmin(true)
+                .setVisibleInRdapAsTech(false)
                 .build(),
             new RegistrarPoc.Builder()
                 .setRegistrar(registrar)
@@ -533,8 +529,8 @@ class SendExpiringCertificateNotificationEmailActionTest {
                 .setPhoneNumber("+1.3105551213")
                 .setFaxNumber("+1.3105551213")
                 .setTypes(ImmutableSet.of(RegistrarPoc.Type.TECH))
-                .setVisibleInWhoisAsAdmin(true)
-                .setVisibleInWhoisAsTech(false)
+                .setVisibleInRdapAsAdmin(true)
+                .setVisibleInRdapAsTech(false)
                 .build(),
             new RegistrarPoc.Builder()
                 .setRegistrar(registrar)
@@ -551,9 +547,9 @@ class SendExpiringCertificateNotificationEmailActionTest {
                 .setPhoneNumber("+1.3105551215")
                 .setFaxNumber("+1.3105551216")
                 .setTypes(ImmutableSet.of(RegistrarPoc.Type.ADMIN))
-                .setVisibleInWhoisAsTech(true)
+                .setVisibleInRdapAsTech(true)
                 .build());
-    persistSimpleResources(contacts);
+    persistResources(contacts);
     assertThat(action.getEmailAddresses(registrar, Type.TECH))
         .containsExactly(
             new InternetAddress("will@example-registrar.tld"),
@@ -582,10 +578,7 @@ class SendExpiringCertificateNotificationEmailActionTest {
     String registrarId = "registrarid";
     String emailBody =
         action.getEmailBody(
-            registrarName,
-            certificateType,
-            DateTime.parse(certExpirationDateStr).toDate(),
-            registrarId);
+            registrarName, certificateType, DateTime.parse(certExpirationDateStr), registrarId);
     assertThat(emailBody).contains(registrarName);
     assertThat(emailBody).contains(certificateType.getDisplayName());
     assertThat(emailBody).contains(certExpirationDateStr);
@@ -614,7 +607,7 @@ class SendExpiringCertificateNotificationEmailActionTest {
             IllegalArgumentException.class,
             () ->
                 action.getEmailBody(
-                    "good registrar", null, DateTime.parse("2021-06-15").toDate(), "registrarId"));
+                    "good registrar", null, DateTime.parse("2021-06-15"), "registrarId"));
     assertThat(thrown).hasMessageThat().contains("Certificate type cannot be null");
   }
 
@@ -627,7 +620,7 @@ class SendExpiringCertificateNotificationEmailActionTest {
                 action.getEmailBody(
                     "good registrar",
                     CertificateType.FAILOVER,
-                    DateTime.parse("2021-06-15").toDate(),
+                    DateTime.parse("2021-06-15"),
                     null));
     assertThat(thrown).hasMessageThat().contains("Registrar Id cannot be null");
   }
@@ -708,7 +701,7 @@ class SendExpiringCertificateNotificationEmailActionTest {
   /** Returns persisted sample contacts with a customized contact email type. */
   private static ImmutableList<RegistrarPoc> persistSampleContacts(
       Registrar registrar, RegistrarPoc.Type emailType) {
-    return persistSimpleResources(
+    return persistResources(
         ImmutableList.of(
             new RegistrarPoc.Builder()
                 .setRegistrar(registrar)

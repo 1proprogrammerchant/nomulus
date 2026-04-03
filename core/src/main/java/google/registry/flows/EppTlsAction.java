@@ -18,34 +18,34 @@ import google.registry.request.Action;
 import google.registry.request.Action.Method;
 import google.registry.request.Payload;
 import google.registry.request.auth.Auth;
-import javax.inject.Inject;
-import javax.servlet.http.HttpSession;
+import jakarta.inject.Inject;
+import jakarta.servlet.http.HttpServletRequest;
 
 /**
  * Establishes a transport for EPP+TLS over HTTP. All commands and responses are EPP XML according
  * to RFC 5730. Commands must be requested via POST.
  */
 @Action(
-    service = Action.Service.DEFAULT,
+    service = Action.Service.FRONTEND,
     path = "/_dr/epp",
     method = Method.POST,
-    auth = Auth.AUTH_API_PUBLIC)
+    auth = Auth.AUTH_ADMIN)
 public class EppTlsAction implements Runnable {
 
   @Inject @Payload byte[] inputXmlBytes;
   @Inject TlsCredentials tlsCredentials;
-  @Inject HttpSession session;
+  @Inject HttpServletRequest request;
   @Inject EppRequestHandler eppRequestHandler;
   @Inject EppTlsAction() {}
 
   @Override
   public void run() {
     eppRequestHandler.executeEpp(
-        new HttpSessionMetadata(session),
+        new CookieSessionMetadata(request),
         tlsCredentials,
         EppRequestSource.TLS,
-        false,  // This endpoint is never a dry run.
-        false,  // This endpoint is never a superuser.
+        false, // This endpoint is never a dry run.
+        false, // This endpoint is never a superuser.
         inputXmlBytes);
   }
 }

@@ -23,7 +23,7 @@ import com.beust.jcommander.Parameter;
 import com.beust.jcommander.Parameters;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
-import google.registry.model.EppResourceUtils;
+import google.registry.model.ForeignKeyUtils;
 import google.registry.model.billing.BillingRecurrence;
 import google.registry.model.common.TimeOfYear;
 import google.registry.model.domain.Domain;
@@ -60,11 +60,13 @@ public class RecreateBillingRecurrencesCommand extends ConfirmingCommand {
               ImmutableList<BillingRecurrence> newRecurrences =
                   convertRecurrencesWithoutSaving(existingRecurrences);
               return String.format(
-                  "Create new BillingRecurrence(s)?\n"
-                      + "Existing recurrences:\n"
-                      + "%s\n"
-                      + "New recurrences:\n"
-                      + "%s",
+                  """
+                  Create new BillingRecurrence(s)?
+                  Existing recurrences:
+                  %s
+                  New recurrences:
+                  %s\
+                  """,
                   Joiner.on('\n').join(existingRecurrences), Joiner.on('\n').join(newRecurrences));
             });
   }
@@ -113,7 +115,7 @@ public class RecreateBillingRecurrencesCommand extends ConfirmingCommand {
     DateTime now = tm().getTransactionTime();
     for (String domainName : mainParameters) {
       Domain domain =
-          EppResourceUtils.loadByForeignKey(Domain.class, domainName, now)
+          ForeignKeyUtils.loadResource(Domain.class, domainName, now)
               .orElseThrow(
                   () ->
                       new IllegalArgumentException(

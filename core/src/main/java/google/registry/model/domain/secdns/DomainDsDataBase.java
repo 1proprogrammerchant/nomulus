@@ -16,22 +16,22 @@ package google.registry.model.domain.secdns;
 
 import google.registry.model.ImmutableObject;
 import google.registry.model.UnsafeSerializable;
-import javax.persistence.Access;
-import javax.persistence.AccessType;
-import javax.persistence.MappedSuperclass;
-import javax.persistence.Transient;
-import javax.xml.bind.DatatypeConverter;
-import javax.xml.bind.annotation.XmlElement;
-import javax.xml.bind.annotation.XmlTransient;
-import javax.xml.bind.annotation.adapters.HexBinaryAdapter;
-import javax.xml.bind.annotation.adapters.XmlJavaTypeAdapter;
+import jakarta.persistence.Access;
+import jakarta.persistence.AccessType;
+import jakarta.persistence.MappedSuperclass;
+import jakarta.persistence.Transient;
+import jakarta.xml.bind.DatatypeConverter;
+import jakarta.xml.bind.annotation.XmlElement;
+import jakarta.xml.bind.annotation.XmlTransient;
+import jakarta.xml.bind.annotation.adapters.HexBinaryAdapter;
+import jakarta.xml.bind.annotation.adapters.XmlJavaTypeAdapter;
 
 /** Base class for {@link DomainDsData} and {@link DomainDsDataHistory}. */
 @MappedSuperclass
 @Access(AccessType.FIELD)
 public abstract class DomainDsDataBase extends ImmutableObject implements UnsafeSerializable {
 
-  @XmlTransient @Transient String domainRepoId;
+  @XmlTransient @Transient @Insignificant String domainRepoId;
 
   /** The identifier for this particular key in the domain. */
   @Transient int keyTag;

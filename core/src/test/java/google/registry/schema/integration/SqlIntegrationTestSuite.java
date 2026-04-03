@@ -16,15 +16,20 @@ package google.registry.schema.integration;
 
 import static com.google.common.truth.Truth.assert_;
 
+import google.registry.bsa.persistence.BsaDomainRefreshTest;
+import google.registry.bsa.persistence.BsaDownloadTest;
+import google.registry.bsa.persistence.BsaLabelTest;
+import google.registry.bsa.persistence.BsaUnblockableDomainTest;
 import google.registry.model.billing.BillingBaseTest;
 import google.registry.model.common.CursorTest;
 import google.registry.model.common.DnsRefreshRequestTest;
+import google.registry.model.common.FeatureFlagTest;
+import google.registry.model.console.ConsoleUpdateHistoryTest;
+import google.registry.model.console.PasswordResetRequestTest;
 import google.registry.model.console.UserTest;
-import google.registry.model.contact.ContactTest;
 import google.registry.model.domain.DomainSqlTest;
 import google.registry.model.domain.token.AllocationTokenTest;
 import google.registry.model.domain.token.BulkPricingPackageTest;
-import google.registry.model.history.ContactHistoryTest;
 import google.registry.model.history.DomainHistoryTest;
 import google.registry.model.history.HostHistoryTest;
 import google.registry.model.poll.PollMessageTest;
@@ -61,7 +66,7 @@ import org.junit.runner.RunWith;
  * and have at least one test method that persists a JPA entity declared in persistence.xml.
  *
  * <p>Note that with {@link JpaIntegrationWithCoverageExtension}, each method starts with an empty
- * database. Therefore this is not the right place for verifying backwards data compatibility in
+ * database. Therefore, this is not the right place for verifying backwards data compatibility in
  * end-to-end functional tests.
  *
  * <p>As of April 2020, none of the before/after annotations ({@code BeforeClass} and {@code
@@ -82,32 +87,39 @@ import org.junit.runner.RunWith;
   BeforeSuiteTest.class,
   AllocationTokenTest.class,
   BillingBaseTest.class,
+  BsaDomainRefreshTest.class,
+  BsaDownloadTest.class,
+  BsaLabelTest.class,
+  BsaUnblockableDomainTest.class,
   BulkPricingPackageTest.class,
   ClaimsListDaoTest.class,
-  ContactHistoryTest.class,
-  ContactTest.class,
+  ConsoleUpdateHistoryTest.class,
   CursorTest.class,
   DnsRefreshRequestTest.class,
   DomainSqlTest.class,
   DomainHistoryTest.class,
+  FeatureFlagTest.class,
   HostHistoryTest.class,
   LockTest.class,
+  PasswordResetRequestTest.class,
   PollMessageTest.class,
   PremiumListDaoTest.class,
   RdeRevisionTest.class,
   RegistrarDaoTest.class,
-  TldTest.class,
   ReservedListDaoTest.class,
   RegistryLockDaoTest.class,
   ServerSecretTest.class,
   SignedMarkRevocationListDaoTest.class,
   Spec11ThreatMatchTest.class,
+  TldTest.class,
   TmchCrlTest.class,
   UserTest.class,
   // AfterSuiteTest must be the last entry. See class javadoc for details.
   AfterSuiteTest.class
 })
-public class SqlIntegrationTestSuite {
+public final class SqlIntegrationTestSuite {
+
+  private SqlIntegrationTestSuite() {}
 
   @BeforeAll // Not yet supported in JUnit 5. Called through BeforeSuiteTest.
   public static void initJpaEntityCoverage() {

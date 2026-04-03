@@ -24,14 +24,14 @@ import com.google.common.io.Files;
 import google.registry.keyring.api.KeyModule.Key;
 import google.registry.rde.Ghostryde;
 import google.registry.tools.params.PathParameter;
+import jakarta.inject.Inject;
+import jakarta.inject.Provider;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import javax.annotation.Nullable;
-import javax.inject.Inject;
-import javax.inject.Provider;
 import org.bouncycastle.openpgp.PGPPrivateKey;
 import org.bouncycastle.openpgp.PGPPublicKey;
 
@@ -76,7 +76,7 @@ final class GhostrydeCommand implements Command {
   Provider<PGPPrivateKey> rdeStagingDecryptionKey;
 
   @Override
-  public final void run() throws Exception {
+  public void run() throws Exception {
     checkArgument(encrypt ^ decrypt, "Please specify either --encrypt or --decrypt");
     if (encrypt) {
       checkArgumentNotNull(output, "--output path is required in --encrypt mode");

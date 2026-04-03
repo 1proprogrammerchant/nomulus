@@ -15,6 +15,7 @@
 package google.registry.flows.session;
 
 import static com.google.common.collect.Sets.difference;
+import static google.registry.model.common.FeatureFlag.FeatureName.PROHIBIT_CONTACT_OBJECTS_ON_LOGIN;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
 import static google.registry.util.CollectionUtils.nullToEmpty;
 
@@ -28,11 +29,18 @@ import google.registry.flows.EppException.CommandUseErrorException;
 import google.registry.flows.EppException.ParameterValuePolicyErrorException;
 import google.registry.flows.EppException.UnimplementedExtensionException;
 import google.registry.flows.EppException.UnimplementedObjectServiceException;
+import google.registry.flows.EppException.UnimplementedProtocolVersionException;
 import google.registry.flows.ExtensionManager;
 import google.registry.flows.FlowModule.RegistrarId;
+import google.registry.flows.FlowUtils.GenericXmlSyntaxErrorException;
+import google.registry.flows.MutatingFlow;
 import google.registry.flows.SessionMetadata;
-import google.registry.flows.TransactionalFlow;
+import google.registry.flows.TlsCredentials.BadRegistrarCertificateException;
+import google.registry.flows.TlsCredentials.BadRegistrarIpAddressException;
+import google.registry.flows.TlsCredentials.MissingRegistrarCertificateException;
 import google.registry.flows.TransportCredentials;
+import google.registry.flows.TransportCredentials.BadRegistrarPasswordException;
+import google.registry.model.common.FeatureFlag;
 import google.registry.model.eppcommon.ProtocolDefinition;
 import google.registry.model.eppcommon.ProtocolDefinition.ServiceExtension;
 import google.registry.model.eppinput.EppInput;
@@ -41,28 +49,30 @@ import google.registry.model.eppinput.EppInput.Options;
 import google.registry.model.eppinput.EppInput.Services;
 import google.registry.model.eppoutput.EppResponse;
 import google.registry.model.registrar.Registrar;
+import google.registry.util.PasswordUtils;
+import google.registry.util.StopwatchLogger;
+import jakarta.inject.Inject;
 import java.util.Optional;
 import java.util.Set;
-import javax.inject.Inject;
 
 /**
  * An EPP flow for login.
  *
- * @error {@link google.registry.flows.EppException.UnimplementedExtensionException}
- * @error {@link google.registry.flows.EppException.UnimplementedObjectServiceException}
- * @error {@link google.registry.flows.EppException.UnimplementedProtocolVersionException}
- * @error {@link google.registry.flows.FlowUtils.GenericXmlSyntaxErrorException}
- * @error {@link google.registry.flows.TlsCredentials.BadRegistrarCertificateException}
- * @error {@link google.registry.flows.TlsCredentials.BadRegistrarIpAddressException}
- * @error {@link google.registry.flows.TlsCredentials.MissingRegistrarCertificateException}
- * @error {@link google.registry.flows.TransportCredentials.BadRegistrarPasswordException}
+ * @error {@link UnimplementedExtensionException}
+ * @error {@link UnimplementedObjectServiceException}
+ * @error {@link UnimplementedProtocolVersionException}
+ * @error {@link GenericXmlSyntaxErrorException}
+ * @error {@link BadRegistrarCertificateException}
+ * @error {@link BadRegistrarIpAddressException}
+ * @error {@link MissingRegistrarCertificateException}
+ * @error {@link BadRegistrarPasswordException}
  * @error {@link LoginFlow.AlreadyLoggedInException}
  * @error {@link BadRegistrarIdException}
  * @error {@link LoginFlow.TooManyFailedLoginsException}
  * @error {@link LoginFlow.RegistrarAccountNotActiveException}
  * @error {@link LoginFlow.UnsupportedLanguageException}
  */
-public class LoginFlow implements TransactionalFlow {
+public class LoginFlow implements MutatingFlow {
 
   private static final FluentLogger logger = FluentLogger.forEnclosingClass();
 
@@ -91,19 +101,29 @@ public class LoginFlow implements TransactionalFlow {
 
   /** Run the flow without bothering to log errors. The {@link #run} method will do that for us. */
   private EppResponse runWithoutLogging() throws EppException {
+    final StopwatchLogger stopwatch = new StopwatchLogger();
     extensionManager.validate();  // There are no legal extensions for this flow.
+    stopwatch.tick("LoginFlow extension validate");
     Login login = (Login) eppInput.getCommandWrapper().getCommand();
+    stopwatch.tick("LoginFlow getCommand");
     if (!registrarId.isEmpty()) {
       throw new AlreadyLoggedInException();
     }
     Options options = login.getOptions();
+    stopwatch.tick("LoginFlow getOptions");
     if (!ProtocolDefinition.LANGUAGE.equals(options.getLanguage())) {
       throw new UnsupportedLanguageException();
     }
     Services services = login.getServices();
-    Set<String> unsupportedObjectServices = difference(
-        nullToEmpty(services.getObjectServices()),
-        ProtocolDefinition.SUPPORTED_OBJECT_SERVICES);
+    stopwatch.tick("LoginFlow getServices");
+
+    Set<String> unsupportedObjectServices =
+        difference(
+            nullToEmpty(services.getObjectServices()),
+            FeatureFlag.isActiveNow(PROHIBIT_CONTACT_OBJECTS_ON_LOGIN)
+                ? ProtocolDefinition.SUPPORTED_OBJECT_SERVICES
+                : ProtocolDefinition.SUPPORTED_OBJECT_SERVICES_WITH_CONTACT);
+    stopwatch.tick("LoginFlow difference unsupportedObjectServices");
     if (!unsupportedObjectServices.isEmpty()) {
       throw new UnimplementedObjectServiceException();
     }
@@ -115,11 +135,12 @@ public class LoginFlow implements TransactionalFlow {
       }
       serviceExtensionUrisBuilder.add(uri);
     }
+    stopwatch.tick("LoginFlow serviceExtensionUrisBuilder");
     Optional<Registrar> registrar = Registrar.loadByRegistrarIdCached(login.getClientId());
-    if (!registrar.isPresent()) {
+    if (registrar.isEmpty()) {
       throw new BadRegistrarIdException(login.getClientId());
     }
-
+    stopwatch.tick("LoginFlow loadByRegistrarIdCached");
     // AuthenticationErrorExceptions will propagate up through here.
     try {
       credentials.validate(registrar.get(), login.getPassword());
@@ -131,56 +152,77 @@ public class LoginFlow implements TransactionalFlow {
         throw e;
       }
     }
+    stopwatch.tick("LoginFlow credentials.validate");
     if (!registrar.get().isLive()) {
       throw new RegistrarAccountNotActiveException();
     }
-    if (login.getNewPassword().isPresent()) {
+
+    // TODO(b/458423787): Remove this circa March 2026 after enough time has passed for the logins
+    // to have transitioned to Argon2 hashing.
+    if (login.getNewPassword().isPresent()
+        || registrar.get().getCurrentHashAlgorithm(login.getPassword()).orElse(null)
+            != PasswordUtils.HashAlgorithm.ARGON_2_ID) {
+      String newPassword =
+          login
+              .getNewPassword()
+              .orElseGet(
+                  () -> {
+                    logger.atInfo().log("Rehashing existing registrar password with ARGON_2_ID");
+                    return login.getPassword();
+                  });
       // Load fresh from database (bypassing the cache) to ensure we don't save stale data.
       Optional<Registrar> freshRegistrar = Registrar.loadByRegistrarId(login.getClientId());
-      if (!freshRegistrar.isPresent()) {
+      stopwatch.tick("LoginFlow reload freshRegistrar");
+      if (freshRegistrar.isEmpty()) {
         throw new BadRegistrarIdException(login.getClientId());
       }
-      tm().put(freshRegistrar.get().asBuilder().setPassword(login.getNewPassword().get()).build());
+      tm().put(freshRegistrar.get().asBuilder().setPassword(newPassword).build());
+      stopwatch.tick("LoginFlow updated password");
     }
 
     // We are in!
     sessionMetadata.resetFailedLoginAttempts();
+    stopwatch.tick("LoginFlow resetFailedLoginAttempts");
     sessionMetadata.setRegistrarId(login.getClientId());
+    stopwatch.tick("LoginFlow setRegistrarId");
     sessionMetadata.setServiceExtensionUris(serviceExtensionUrisBuilder.build());
-    return responseBuilder.setIsLoginResponse().build();
+    stopwatch.tick("LoginFlow setServiceExtensionUris");
+    EppResponse eppResponse = responseBuilder.setIsLoginResponse().build();
+    stopwatch.tick("LoginFlow eppResponse build()");
+    return eppResponse;
   }
 
   /** Registrar with this ID could not be found. */
   static class BadRegistrarIdException extends AuthenticationErrorException {
-    public BadRegistrarIdException(String registrarId) {
+    BadRegistrarIdException(String registrarId) {
       super("Registrar with this ID could not be found: " + registrarId);
     }
   }
 
   /** Registrar login failed too many times. */
   static class TooManyFailedLoginsException extends AuthenticationErrorClosingConnectionException {
-    public TooManyFailedLoginsException() {
+    TooManyFailedLoginsException() {
       super("Registrar login failed too many times");
     }
   }
 
   /** Registrar account is not active. */
   static class RegistrarAccountNotActiveException extends AuthorizationErrorException {
-    public RegistrarAccountNotActiveException() {
+    RegistrarAccountNotActiveException() {
       super("Registrar account is not active");
     }
   }
 
   /** Registrar is already logged in. */
   static class AlreadyLoggedInException extends CommandUseErrorException {
-    public AlreadyLoggedInException() {
+    AlreadyLoggedInException() {
       super("Registrar is already logged in");
     }
   }
 
   /** Specified language is not supported. */
   static class UnsupportedLanguageException extends ParameterValuePolicyErrorException {
-    public UnsupportedLanguageException() {
+    UnsupportedLanguageException() {
       super("Specified language is not supported");
     }
   }

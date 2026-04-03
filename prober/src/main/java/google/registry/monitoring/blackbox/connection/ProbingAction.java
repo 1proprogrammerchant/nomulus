@@ -35,13 +35,13 @@ import io.netty.channel.local.LocalAddress;
 import io.netty.util.AttributeKey;
 import io.netty.util.HashedWheelTimer;
 import io.netty.util.Timer;
+import jakarta.inject.Provider;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.net.UnknownHostException;
 import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
-import javax.inject.Provider;
 import org.joda.time.Duration;
 
 /**
@@ -202,10 +202,12 @@ public abstract class ProbingAction implements Callable<ChannelFuture> {
   @Override
   public final String toString() {
     return String.format(
-        "ProbingAction with delay: %d\n"
-            + "outboundMessage: %s\n"
-            + "protocol: %s\n"
-            + "host: %s\n",
+        """
+        ProbingAction with delay: %d
+        outboundMessage: %s
+        protocol: %s
+        host: %s
+        """,
         delay().getStandardSeconds(), outboundMessage(), protocol(), host());
   }
 
@@ -268,7 +270,7 @@ public abstract class ProbingAction implements Callable<ChannelFuture> {
       if (channel == null) {
         bootstrap
             .handler(
-                new ChannelInitializer<Channel>() {
+                new ChannelInitializer<>() {
                   @Override
                   protected void initChannel(Channel outboundChannel) {
                     // Uses Handlers from Protocol to fill pipeline in order of provided handlers.

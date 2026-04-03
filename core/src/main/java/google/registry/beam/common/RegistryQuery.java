@@ -17,16 +17,16 @@ package google.registry.beam.common;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
 
 import google.registry.persistence.transaction.JpaTransactionManager;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.Query;
+import jakarta.persistence.TypedQuery;
+import jakarta.persistence.criteria.CriteriaQuery;
 import java.io.Serializable;
+import java.time.Instant;
 import java.util.Map;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 import javax.annotation.Nullable;
-import javax.persistence.EntityManager;
-import javax.persistence.Query;
-import javax.persistence.TemporalType;
-import javax.persistence.TypedQuery;
-import javax.persistence.criteria.CriteriaQuery;
 import org.joda.time.DateTime;
 
 /** Interface for query instances used by {@link RegistryJpaIO.Read}. */
@@ -61,8 +61,8 @@ public interface RegistryQuery<T> extends Serializable {
       if (parameters != null) {
         parameters.forEach(
             (key, value) -> {
-              if (value instanceof DateTime) {
-                query.setParameter(key, ((DateTime) value).toDate(), TemporalType.TIMESTAMP);
+              if (value instanceof DateTime dt) {
+                query.setParameter(key, Instant.ofEpochMilli(dt.getMillis()));
               } else {
                 query.setParameter(key, value);
               }

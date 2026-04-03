@@ -27,11 +27,11 @@ import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.ssl.SslProvider;
+import jakarta.inject.Singleton;
 import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
 import java.util.function.Function;
 import java.util.function.Supplier;
-import javax.inject.Singleton;
 import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLParameters;
 
@@ -119,6 +119,7 @@ public class SslClientInitializer<C extends Channel> extends ChannelInitializer<
         sslContextBuilder
             .build()
             .newHandler(channel.alloc(), hostProvider.apply(channel), portProvider.apply(channel));
+    sslHandler.setHandshakeTimeoutMillis(20000);
 
     // Enable hostname verification.
     SSLEngine sslEngine = sslHandler.engine();

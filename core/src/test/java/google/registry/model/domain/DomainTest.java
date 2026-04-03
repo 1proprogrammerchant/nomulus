@@ -17,23 +17,24 @@ package google.registry.model.domain;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.common.truth.Truth8.assertThat;
-import static google.registry.model.EppResourceUtils.loadByForeignKey;
 import static google.registry.model.billing.BillingBase.RenewalPriceBehavior.SPECIFIED;
 import static google.registry.model.domain.token.AllocationToken.TokenType.BULK_PRICING;
 import static google.registry.model.domain.token.AllocationToken.TokenType.SINGLE_USE;
 import static google.registry.testing.DatabaseHelper.cloneAndSetAutoTimestamps;
 import static google.registry.testing.DatabaseHelper.createTld;
-import static google.registry.testing.DatabaseHelper.insertInDb;
 import static google.registry.testing.DatabaseHelper.newHost;
-import static google.registry.testing.DatabaseHelper.persistActiveContact;
 import static google.registry.testing.DatabaseHelper.persistActiveDomain;
 import static google.registry.testing.DatabaseHelper.persistActiveHost;
 import static google.registry.testing.DatabaseHelper.persistResource;
+import static google.registry.testing.DatabaseHelper.persistResources;
 import static google.registry.testing.DomainSubject.assertAboutDomains;
 import static google.registry.testing.SqlHelper.saveRegistrar;
 import static google.registry.util.DateTimeUtils.END_OF_TIME;
 import static google.registry.util.DateTimeUtils.START_OF_TIME;
+import static google.registry.util.DateTimeUtils.minusDays;
+import static google.registry.util.DateTimeUtils.plusDays;
+import static google.registry.util.DateTimeUtils.plusYears;
+import static google.registry.util.DateTimeUtils.toDateTime;
 import static org.joda.money.CurrencyUnit.USD;
 import static org.joda.time.DateTimeZone.UTC;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -44,14 +45,14 @@ import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Ordering;
 import com.google.common.collect.Streams;
+import google.registry.model.ForeignKeyUtils;
 import google.registry.model.ImmutableObject;
 import google.registry.model.ImmutableObjectSubject;
 import google.registry.model.billing.BillingBase.Flag;
 import google.registry.model.billing.BillingBase.Reason;
 import google.registry.model.billing.BillingEvent;
 import google.registry.model.billing.BillingRecurrence;
-import google.registry.model.contact.Contact;
-import google.registry.model.domain.DesignatedContact.Type;
+import google.registry.model.domain.fee.FeeQueryCommandExtensionItem.CommandName;
 import google.registry.model.domain.launch.LaunchNotice;
 import google.registry.model.domain.rgp.GracePeriodStatus;
 import google.registry.model.domain.secdns.DomainDsData;
@@ -70,6 +71,8 @@ import google.registry.persistence.transaction.JpaTestExtensions;
 import google.registry.persistence.transaction.JpaTestExtensions.JpaIntegrationWithCoverageExtension;
 import google.registry.testing.DatabaseHelper;
 import google.registry.testing.FakeClock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.Optional;
 import org.joda.money.Money;
 import org.joda.time.DateTime;
@@ -91,7 +94,6 @@ public class DomainTest {
   private VKey<BillingEvent> oneTimeBillKey;
   private VKey<BillingRecurrence> recurrenceBillKey;
   private DomainHistory domainHistory;
-  private VKey<Contact> contact1Key, contact2Key;
 
   @BeforeEach
   void setUp() {
@@ -102,8 +104,6 @@ public class DomainTest {
     createTld("com");
     domain = persistActiveDomain("example.com");
     VKey<Host> hostKey = persistActiveHost("ns1.example.com").createVKey();
-    contact1Key = persistActiveContact("contact_id1").createVKey();
-    contact2Key = persistActiveContact("contact_id1").createVKey();
     domainHistory =
         persistResource(
             new DomainHistory.Builder()
@@ -162,7 +162,7 @@ public class DomainTest {
             .setRecurrenceEndTime(END_OF_TIME)
             .setDomainHistory(historyEntry)
             .build();
-    insertInDb(historyEntry, billingEventBill, billingRecurrence);
+    persistResources(historyEntry, billingEventBill, billingRecurrence);
     recurrenceBillKey = billingRecurrence.createVKey();
     VKey<PollMessage.Autorenew> autorenewPollKey = VKey.create(PollMessage.Autorenew.class, 3L);
     VKey<PollMessage.OneTime> onetimePollKey = VKey.create(PollMessage.OneTime.class, 1L);
@@ -185,7 +185,6 @@ public class DomainTest {
                             StatusValue.SERVER_UPDATE_PROHIBITED,
                             StatusValue.SERVER_RENEW_PROHIBITED,
                             StatusValue.SERVER_HOLD))
-                    .setRegistrant(contact1Key)
                     .setNameservers(ImmutableSet.of(hostKey))
                     .setSubordinateHosts(ImmutableSet.of("ns1.example.com"))
                     .setPersistedCurrentSponsorRegistrarId("NewRegistrar")
@@ -238,7 +237,8 @@ public class DomainTest {
     // Note that this only verifies that the value stored under the foreign key is the same as that
     // stored under the primary key ("domain" is the domain loaded from the the database, not the
     // original domain object).
-    assertThat(loadByForeignKey(Domain.class, domain.getForeignKey(), fakeClock.nowUtc()))
+    String foreignKey = domain.getForeignKey();
+    assertThat(ForeignKeyUtils.loadResource(Domain.class, foreignKey, fakeClock.nowUtc()))
         .hasValue(domain);
   }
 
@@ -392,7 +392,7 @@ public class DomainTest {
         .isEqualTo(TransferStatus.SERVER_APPROVED);
     assertThat(domain.getCurrentSponsorRegistrarId()).isEqualTo("TheRegistrar");
     assertThat(domain.getLastTransferTime()).isEqualTo(fakeClock.nowUtc().plusDays(1));
-    assertThat(domain.getRegistrationExpirationTime()).isEqualTo(newExpirationTime);
+    assertThat(domain.getRegistrationExpirationDateTime()).isEqualTo(newExpirationTime);
     assertThat(domain.getAutorenewBillingEvent()).isEqualTo(newAutorenewEvent);
   }
 
@@ -485,56 +485,57 @@ public class DomainTest {
   }
 
   private void setupPendingTransferDomain(
-      DateTime oldExpirationTime, DateTime transferRequestTime, DateTime transferSuccessTime) {
+      Instant oldExpirationTime, Instant transferRequestTime, Instant transferSuccessTime) {
     domain =
         domain
             .asBuilder()
-            .setRegistrationExpirationTime(oldExpirationTime)
+            .setRegistrationExpirationTime(toDateTime(oldExpirationTime))
             .setTransferData(
                 domain
                     .getTransferData()
                     .asBuilder()
                     .setTransferStatus(TransferStatus.PENDING)
-                    .setTransferRequestTime(transferRequestTime)
-                    .setPendingTransferExpirationTime(transferSuccessTime)
+                    .setTransferRequestTime(toDateTime(transferRequestTime))
+                    .setPendingTransferExpirationTime(toDateTime(transferSuccessTime))
                     .build())
-            .setLastEppUpdateTime(transferRequestTime)
+            .setLastEppUpdateTime(toDateTime(transferRequestTime))
             .setLastEppUpdateRegistrarId(domain.getTransferData().getGainingRegistrarId())
             .build();
   }
 
   @Test
   void testEppLastUpdateTimeAndClientId_autoRenewBeforeTransferSuccess() {
-    DateTime now = fakeClock.nowUtc();
-    DateTime transferRequestDateTime = now.plusDays(1);
-    DateTime autorenewDateTime = now.plusDays(3);
-    DateTime transferSuccessDateTime = now.plusDays(5);
+    Instant now = fakeClock.now();
+    Instant transferRequestDateTime = plusDays(now, 1);
+    Instant autorenewDateTime = plusDays(now, 3);
+    Instant transferSuccessDateTime = plusDays(now, 5);
     setupPendingTransferDomain(autorenewDateTime, transferRequestDateTime, transferSuccessDateTime);
 
-    Domain beforeAutoRenew = domain.cloneProjectedAtTime(autorenewDateTime.minusDays(1));
+    Domain beforeAutoRenew = domain.cloneProjectedAtInstant(minusDays(autorenewDateTime, 1));
     assertThat(beforeAutoRenew.getLastEppUpdateTime()).isEqualTo(transferRequestDateTime);
     assertThat(beforeAutoRenew.getLastEppUpdateRegistrarId()).isEqualTo("TheRegistrar");
 
     // If autorenew happens before transfer succeeds(before transfer grace period starts as well),
     // lastEppUpdateRegistrarId should still be the current sponsor client id
-    Domain afterAutoRenew = domain.cloneProjectedAtTime(autorenewDateTime.plusDays(1));
+    Domain afterAutoRenew = domain.cloneProjectedAtInstant(plusDays(autorenewDateTime, 1));
     assertThat(afterAutoRenew.getLastEppUpdateTime()).isEqualTo(autorenewDateTime);
     assertThat(afterAutoRenew.getLastEppUpdateRegistrarId()).isEqualTo("NewRegistrar");
   }
 
   @Test
   void testEppLastUpdateTimeAndClientId_autoRenewAfterTransferSuccess() {
-    DateTime now = fakeClock.nowUtc();
-    DateTime transferRequestDateTime = now.plusDays(1);
-    DateTime autorenewDateTime = now.plusDays(3);
-    DateTime transferSuccessDateTime = now.plusDays(5);
+    Instant now = fakeClock.now();
+    Instant transferRequestDateTime = plusDays(now, 1);
+    Instant autorenewDateTime = plusDays(now, 3);
+    Instant transferSuccessDateTime = plusDays(now, 5);
     setupPendingTransferDomain(autorenewDateTime, transferRequestDateTime, transferSuccessDateTime);
 
-    Domain beforeAutoRenew = domain.cloneProjectedAtTime(autorenewDateTime.minusDays(1));
+    Domain beforeAutoRenew = domain.cloneProjectedAtInstant(minusDays(autorenewDateTime, 1));
     assertThat(beforeAutoRenew.getLastEppUpdateTime()).isEqualTo(transferRequestDateTime);
     assertThat(beforeAutoRenew.getLastEppUpdateRegistrarId()).isEqualTo("TheRegistrar");
 
-    Domain afterTransferSuccess = domain.cloneProjectedAtTime(transferSuccessDateTime.plusDays(1));
+    Domain afterTransferSuccess =
+        domain.cloneProjectedAtInstant(plusDays(transferSuccessDateTime, 1));
     assertThat(afterTransferSuccess.getLastEppUpdateTime()).isEqualTo(transferSuccessDateTime);
     assertThat(afterTransferSuccess.getLastEppUpdateRegistrarId()).isEqualTo("TheRegistrar");
   }
@@ -558,11 +559,11 @@ public class DomainTest {
     setupUnmodifiedDomain(autorenewDateTime);
 
     Domain beforeAutoRenew = domain.cloneProjectedAtTime(autorenewDateTime.minusDays(1));
-    assertThat(beforeAutoRenew.getLastEppUpdateTime()).isEqualTo(null);
+    assertThat(beforeAutoRenew.getLastEppUpdateDateTime()).isEqualTo(null);
     assertThat(beforeAutoRenew.getLastEppUpdateRegistrarId()).isEqualTo(null);
 
     Domain afterAutoRenew = domain.cloneProjectedAtTime(autorenewDateTime.plusDays(1));
-    assertThat(afterAutoRenew.getLastEppUpdateTime()).isEqualTo(autorenewDateTime);
+    assertThat(afterAutoRenew.getLastEppUpdateDateTime()).isEqualTo(autorenewDateTime);
     assertThat(afterAutoRenew.getLastEppUpdateRegistrarId()).isEqualTo("NewRegistrar");
   }
 
@@ -639,9 +640,9 @@ public class DomainTest {
 
   @Test
   void testRenewalsHappenAtExpiration() {
-    Domain renewed = domain.cloneProjectedAtTime(domain.getRegistrationExpirationTime());
+    Domain renewed = domain.cloneProjectedAtInstant(domain.getRegistrationExpirationTime());
     assertThat(renewed.getRegistrationExpirationTime())
-        .isEqualTo(domain.getRegistrationExpirationTime().plusYears(1));
+        .isEqualTo(plusYears(domain.getRegistrationExpirationTime(), 1));
     assertThat(renewed.getLastEppUpdateTime()).isEqualTo(domain.getRegistrationExpirationTime());
     assertThat(getOnlyElement(renewed.getGracePeriods()).getType())
         .isEqualTo(GracePeriodStatus.AUTO_RENEW);
@@ -662,15 +663,16 @@ public class DomainTest {
             .setRegistrationExpirationTime(DateTime.parse("2004-02-29T22:00:00.0Z"))
             .build();
     Domain renewed =
-        domain.cloneProjectedAtTime(domain.getRegistrationExpirationTime().plusYears(4));
-    assertThat(renewed.getRegistrationExpirationTime().getDayOfMonth()).isEqualTo(28);
+        domain.cloneProjectedAtInstant(plusYears(domain.getRegistrationExpirationTime(), 4));
+    assertThat(renewed.getRegistrationExpirationTime().atZone(ZoneOffset.UTC).getDayOfMonth())
+        .isEqualTo(28);
   }
 
   @Test
   void testMultipleAutoRenews() {
     // Change the registry so that renewal costs change every year to make sure we are using the
     // autorenew time as the lookup time for the cost.
-    DateTime oldExpirationTime = domain.getRegistrationExpirationTime();
+    DateTime oldExpirationTime = domain.getRegistrationExpirationDateTime();
     persistResource(
         Tld.get("com")
             .asBuilder()
@@ -686,9 +688,10 @@ public class DomainTest {
                     .build())
             .build());
     Domain renewedThreeTimes = domain.cloneProjectedAtTime(oldExpirationTime.plusYears(2));
-    assertThat(renewedThreeTimes.getRegistrationExpirationTime())
+    assertThat(renewedThreeTimes.getRegistrationExpirationDateTime())
         .isEqualTo(oldExpirationTime.plusYears(3));
-    assertThat(renewedThreeTimes.getLastEppUpdateTime()).isEqualTo(oldExpirationTime.plusYears(2));
+    assertThat(renewedThreeTimes.getLastEppUpdateDateTime())
+        .isEqualTo(oldExpirationTime.plusYears(2));
     assertThat(renewedThreeTimes.getGracePeriods())
         .containsExactly(
             GracePeriod.createForRecurrence(
@@ -736,7 +739,7 @@ public class DomainTest {
                 .setDeletionTime(now.minusDays(10))
                 .setStatusValues(ImmutableSet.of(StatusValue.PENDING_DELETE, StatusValue.INACTIVE))
                 .build());
-    assertThat(domain.cloneProjectedAtTime(now).getRegistrationExpirationTime())
+    assertThat(domain.cloneProjectedAtTime(now).getRegistrationExpirationDateTime())
         .isEqualTo(now.minusDays(1));
   }
 
@@ -752,7 +755,7 @@ public class DomainTest {
                 .setDeletionTime(now.plusDays(20))
                 .setStatusValues(ImmutableSet.of(StatusValue.PENDING_DELETE, StatusValue.INACTIVE))
                 .build());
-    assertThat(domain.cloneProjectedAtTime(now).getRegistrationExpirationTime())
+    assertThat(domain.cloneProjectedAtTime(now).getRegistrationExpirationDateTime())
         .isEqualTo(now.plusDays(1));
   }
 
@@ -779,7 +782,7 @@ public class DomainTest {
                 .setTransferData(transferData)
                 .build());
 
-    assertThat(domain.cloneProjectedAtTime(now).getRegistrationExpirationTime())
+    assertThat(domain.cloneProjectedAtTime(now).getRegistrationExpirationDateTime())
         .isEqualTo(newExpiration);
   }
 
@@ -807,7 +810,7 @@ public class DomainTest {
                 .setTransferData(transferData)
                 .build());
 
-    assertThat(domain.cloneProjectedAtTime(now).getRegistrationExpirationTime())
+    assertThat(domain.cloneProjectedAtTime(now).getRegistrationExpirationDateTime())
         .isEqualTo(newExpiration);
   }
 
@@ -832,7 +835,10 @@ public class DomainTest {
             new AllocationToken.Builder()
                 .setToken("abc123")
                 .setTokenType(BULK_PRICING)
+                .setDiscountFraction(1.0)
                 .setRenewalPriceBehavior(SPECIFIED)
+                .setRenewalPrice(Money.of(USD, 0))
+                .setAllowedEppActions(ImmutableSet.of(CommandName.CREATE))
                 .setAllowedRegistrarIds(ImmutableSet.of("TheRegistrar"))
                 .build());
     domain =
@@ -846,7 +852,7 @@ public class DomainTest {
 
     assertThat(domain.getCurrentBulkToken()).isPresent();
     Domain clonedDomain = domain.cloneProjectedAtTime(now);
-    assertThat(clonedDomain.getRegistrationExpirationTime()).isEqualTo(newExpiration);
+    assertThat(clonedDomain.getRegistrationExpirationDateTime()).isEqualTo(newExpiration);
     assertThat(clonedDomain.getCurrentBulkToken()).isEmpty();
   }
 
@@ -871,7 +877,7 @@ public class DomainTest {
                 .setTransferData(transferData)
                 .build());
 
-    assertThat(domain.cloneProjectedAtTime(now).getRegistrationExpirationTime())
+    assertThat(domain.cloneProjectedAtTime(now).getRegistrationExpirationDateTime())
         .isEqualTo(previousExpiration);
   }
 
@@ -893,7 +899,10 @@ public class DomainTest {
             new AllocationToken.Builder()
                 .setToken("abc123")
                 .setTokenType(BULK_PRICING)
+                .setDiscountFraction(1.0)
                 .setRenewalPriceBehavior(SPECIFIED)
+                .setRenewalPrice(Money.of(USD, 0))
+                .setAllowedEppActions(ImmutableSet.of(CommandName.CREATE))
                 .setAllowedRegistrarIds(ImmutableSet.of("TheRegistrar"))
                 .build());
     domain =
@@ -906,7 +915,7 @@ public class DomainTest {
                 .build());
 
     Domain clonedDomain = domain.cloneProjectedAtTime(now);
-    assertThat(clonedDomain.getRegistrationExpirationTime()).isEqualTo(previousExpiration);
+    assertThat(clonedDomain.getRegistrationExpirationDateTime()).isEqualTo(previousExpiration);
     assertThat(clonedDomain.getCurrentBulkToken().get()).isEqualTo(allocationToken.createVKey());
   }
 
@@ -943,8 +952,8 @@ public class DomainTest {
                 .setAutorenewBillingEvent(recurrenceBillKey)
                 .build());
     Domain clone = domain.cloneProjectedAtTime(now);
-    assertThat(clone.getRegistrationExpirationTime())
-        .isEqualTo(domain.getRegistrationExpirationTime().plusYears(1));
+    assertThat(clone.getRegistrationExpirationDateTime())
+        .isEqualTo(domain.getRegistrationExpirationDateTime().plusYears(1));
     // Transferring removes the AUTORENEW grace period and adds a TRANSFER grace period
     assertThat(getOnlyElement(clone.getGracePeriods()).getType())
         .isEqualTo(GracePeriodStatus.TRANSFER);
@@ -998,51 +1007,6 @@ public class DomainTest {
   }
 
   @Test
-  void testContactFields() {
-    VKey<Contact> contact3Key = persistActiveContact("contact_id3").createVKey();
-    VKey<Contact> contact4Key = persistActiveContact("contact_id4").createVKey();
-
-    // Set all of the contacts.
-    domain.setContactFields(
-        ImmutableSet.of(
-            DesignatedContact.create(Type.REGISTRANT, contact1Key),
-            DesignatedContact.create(Type.ADMIN, contact2Key),
-            DesignatedContact.create(Type.BILLING, contact3Key),
-            DesignatedContact.create(Type.TECH, contact4Key)),
-        true);
-    assertThat(domain.getRegistrant()).isEqualTo(contact1Key);
-    assertThat(domain.getAdminContact()).isEqualTo(contact2Key);
-    assertThat(domain.getBillingContact()).isEqualTo(contact3Key);
-    assertThat(domain.getTechContact()).isEqualTo(contact4Key);
-
-    // Make sure everything gets nulled out.
-    domain.setContactFields(ImmutableSet.of(), true);
-    assertThat(domain.getRegistrant()).isNull();
-    assertThat(domain.getAdminContact()).isNull();
-    assertThat(domain.getBillingContact()).isNull();
-    assertThat(domain.getTechContact()).isNull();
-
-    // Make sure that changes don't affect the registrant unless requested.
-    domain.setContactFields(
-        ImmutableSet.of(
-            DesignatedContact.create(Type.REGISTRANT, contact1Key),
-            DesignatedContact.create(Type.ADMIN, contact2Key),
-            DesignatedContact.create(Type.BILLING, contact3Key),
-            DesignatedContact.create(Type.TECH, contact4Key)),
-        false);
-    assertThat(domain.getRegistrant()).isNull();
-    assertThat(domain.getAdminContact()).isEqualTo(contact2Key);
-    assertThat(domain.getBillingContact()).isEqualTo(contact3Key);
-    assertThat(domain.getTechContact()).isEqualTo(contact4Key);
-    domain = domain.asBuilder().setRegistrant(contact1Key).build();
-    domain.setContactFields(ImmutableSet.of(), false);
-    assertThat(domain.getRegistrant()).isEqualTo(contact1Key);
-    assertThat(domain.getAdminContact()).isNull();
-    assertThat(domain.getBillingContact()).isNull();
-    assertThat(domain.getTechContact()).isNull();
-  }
-
-  @Test
   void testFail_currentBulkTokenWrongTokenType() {
     AllocationToken allocationToken =
         persistResource(
@@ -1062,7 +1026,10 @@ public class DomainTest {
         new AllocationToken.Builder()
             .setToken("abc123")
             .setTokenType(BULK_PRICING)
+            .setDiscountFraction(1.0)
             .setRenewalPriceBehavior(SPECIFIED)
+            .setRenewalPrice(Money.of(USD, 0))
+            .setAllowedEppActions(ImmutableSet.of(CommandName.CREATE))
             .setAllowedRegistrarIds(ImmutableSet.of("TheRegistrar"))
             .build();
     IllegalArgumentException thrown =
@@ -1079,7 +1046,10 @@ public class DomainTest {
             new AllocationToken.Builder()
                 .setToken("abc123")
                 .setTokenType(BULK_PRICING)
+                .setDiscountFraction(1.0)
                 .setRenewalPriceBehavior(SPECIFIED)
+                .setRenewalPrice(Money.of(USD, 0))
+                .setAllowedEppActions(ImmutableSet.of(CommandName.CREATE))
                 .setAllowedRegistrarIds(ImmutableSet.of("TheRegistrar"))
                 .build());
     domain = domain.asBuilder().setCurrentBulkToken(allocationToken.createVKey()).build();

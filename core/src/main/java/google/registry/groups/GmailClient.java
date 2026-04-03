@@ -23,33 +23,34 @@ import com.google.api.services.gmail.model.Message;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.flogger.FluentLogger;
 import com.google.common.net.MediaType;
+import dagger.Lazy;
 import google.registry.config.RegistryConfig.Config;
 import google.registry.util.EmailMessage;
 import google.registry.util.EmailMessage.Attachment;
 import google.registry.util.Retrier;
+import jakarta.inject.Inject;
+import jakarta.mail.Address;
+import jakarta.mail.BodyPart;
+import jakarta.mail.Message.RecipientType;
+import jakarta.mail.MessagingException;
+import jakarta.mail.Multipart;
+import jakarta.mail.Session;
+import jakarta.mail.internet.InternetAddress;
+import jakarta.mail.internet.MimeBodyPart;
+import jakarta.mail.internet.MimeMessage;
+import jakarta.mail.internet.MimeMultipart;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.util.Properties;
 import java.util.function.Predicate;
-import javax.inject.Inject;
-import javax.mail.Address;
-import javax.mail.BodyPart;
-import javax.mail.Message.RecipientType;
-import javax.mail.MessagingException;
-import javax.mail.Multipart;
-import javax.mail.Session;
-import javax.mail.internet.InternetAddress;
-import javax.mail.internet.MimeBodyPart;
-import javax.mail.internet.MimeMessage;
-import javax.mail.internet.MimeMultipart;
 
 /** Sends {@link EmailMessage EmailMessages} through Google Workspace using {@link Gmail}. */
 public final class GmailClient {
 
   private static final FluentLogger logger = FluentLogger.forEnclosingClass();
 
-  private final Gmail gmail;
+  private final Lazy<Gmail> gmail;
   private final Retrier retrier;
   private final boolean isEmailSendingEnabled;
   private final InternetAddress outgoingEmailAddressWithUsername;
@@ -57,7 +58,7 @@ public final class GmailClient {
 
   @Inject
   GmailClient(
-      Gmail gmail,
+      Lazy<Gmail> gmail,
       Retrier retrier,
       @Config("isEmailSendingEnabled") boolean isEmailSendingEnabled,
       @Config("gSuiteNewOutgoingEmailAddress") String gSuiteOutgoingEmailAddress,
@@ -78,9 +79,6 @@ public final class GmailClient {
 
   /**
    * Sends {@code emailMessage} using {@link Gmail}.
-   *
-   * <p>If the sender as specified by {@link EmailMessage#from} differs from the caller's identity,
-   * the caller must have delegated `send` authority to the sender.
    */
   public void sendEmail(EmailMessage emailMessage) {
     if (!isEmailSendingEnabled) {
@@ -99,7 +97,7 @@ public final class GmailClient {
     // Unlike other Cloud APIs such as GCS and SecretManager, Gmail does not retry on errors.
     retrier.callWithRetry(
         // "me" is reserved word for the authorized user of the Gmail API.
-        () -> this.gmail.users().messages().send("me", message).execute(),
+        () -> this.gmail.get().users().messages().send("me", message).execute(),
         RetriableGmailExceptionPredicate.INSTANCE);
   }
 
@@ -119,7 +117,8 @@ public final class GmailClient {
       MimeMessage msg =
           new MimeMessage(Session.getDefaultInstance(new Properties(), /* authenticator= */ null));
       msg.setFrom(this.outgoingEmailAddressWithUsername);
-      msg.setReplyTo(new InternetAddress[] {replyToEmailAddress});
+      msg.setReplyTo(
+          new InternetAddress[] {emailMessage.replyToEmailAddress().orElse(replyToEmailAddress)});
       msg.addRecipients(
           RecipientType.TO, toArray(emailMessage.recipients(), InternetAddress.class));
       msg.setSubject(emailMessage.subject());
@@ -136,6 +135,7 @@ public final class GmailClient {
         BodyPart attachmentPart = new MimeBodyPart();
         attachmentPart.setContent(attachment.content(), attachment.contentType().toString());
         attachmentPart.setFileName(attachment.filename());
+        attachmentPart.setDisposition(MimeBodyPart.ATTACHMENT);
         multipart.addBodyPart(attachmentPart);
       }
       msg.addRecipients(RecipientType.BCC, toArray(emailMessage.bccs(), Address.class));

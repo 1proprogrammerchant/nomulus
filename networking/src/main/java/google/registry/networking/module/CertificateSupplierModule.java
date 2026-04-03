@@ -26,6 +26,10 @@ import dagger.Lazy;
 import dagger.Module;
 import dagger.Provides;
 import google.registry.util.SelfSignedCaCertificate;
+import jakarta.inject.Named;
+import jakarta.inject.Provider;
+import jakarta.inject.Qualifier;
+import jakarta.inject.Singleton;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -36,10 +40,6 @@ import java.security.cert.X509Certificate;
 import java.time.Duration;
 import java.util.function.Function;
 import java.util.function.Supplier;
-import javax.inject.Named;
-import javax.inject.Provider;
-import javax.inject.Qualifier;
-import javax.inject.Singleton;
 import org.bouncycastle.asn1.pkcs.PrivateKeyInfo;
 import org.bouncycastle.cert.X509CertificateHolder;
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
@@ -131,16 +131,12 @@ public final class CertificateSupplierModule {
       @PemFile Lazy<Supplier<PrivateKey>> pemPrivateKeySupplier,
       @P12File Lazy<Supplier<PrivateKey>> p12PrivateKeySupplier,
       @SelfSigned Lazy<Supplier<PrivateKey>> selfSignedPrivateKeySupplier) {
-    switch (mode) {
-      case PEM_FILE:
-        return pemPrivateKeySupplier.get();
-      case P12_FILE:
-        return p12PrivateKeySupplier.get();
-      case SELF_SIGNED:
-        return selfSignedPrivateKeySupplier.get();
-      default:
-        throw new RuntimeException("Certificate provider mode exhausted.");
-    }
+    return switch (mode) {
+      case PEM_FILE -> pemPrivateKeySupplier.get();
+      case P12_FILE -> p12PrivateKeySupplier.get();
+      case SELF_SIGNED -> selfSignedPrivateKeySupplier.get();
+      default -> throw new RuntimeException("Certificate provider mode exhausted.");
+    };
   }
 
   @Singleton
@@ -150,16 +146,12 @@ public final class CertificateSupplierModule {
       @PemFile Lazy<Supplier<ImmutableList<X509Certificate>>> pemCertificatesSupplier,
       @P12File Lazy<Supplier<ImmutableList<X509Certificate>>> p12CertificatesSupplier,
       @SelfSigned Lazy<Supplier<ImmutableList<X509Certificate>>> selfSignedCertificatesSupplier) {
-    switch (mode) {
-      case PEM_FILE:
-        return pemCertificatesSupplier.get();
-      case P12_FILE:
-        return p12CertificatesSupplier.get();
-      case SELF_SIGNED:
-        return selfSignedCertificatesSupplier.get();
-      default:
-        throw new RuntimeException("Certificate provider mode exhausted.");
-    }
+    return switch (mode) {
+      case PEM_FILE -> pemCertificatesSupplier.get();
+      case P12_FILE -> p12CertificatesSupplier.get();
+      case SELF_SIGNED -> selfSignedCertificatesSupplier.get();
+      default -> throw new RuntimeException("Certificate provider mode exhausted.");
+    };
   }
 
   @Singleton
@@ -284,7 +276,7 @@ public final class CertificateSupplierModule {
   static Supplier<PrivateKey> providePemPrivateKeySupplier(
       @PemFile Provider<PrivateKey> privateKeyProvider,
       @Named("remoteCertCachingDuration") Duration cachingDuration) {
-    return memoizeWithExpiration(privateKeyProvider::get, cachingDuration.getSeconds(), SECONDS);
+    return memoizeWithExpiration(privateKeyProvider::get, cachingDuration.toSeconds(), SECONDS);
   }
 
   @Singleton
@@ -293,7 +285,7 @@ public final class CertificateSupplierModule {
   static Supplier<ImmutableList<X509Certificate>> providePemCertificatesSupplier(
       @PemFile Provider<ImmutableList<X509Certificate>> certificatesProvider,
       @Named("remoteCertCachingDuration") Duration cachingDuration) {
-    return memoizeWithExpiration(certificatesProvider::get, cachingDuration.getSeconds(), SECONDS);
+    return memoizeWithExpiration(certificatesProvider::get, cachingDuration.toSeconds(), SECONDS);
   }
 
   // TODO(jianglai): Implement P12 supplier or convert the file to PEM format.

@@ -18,25 +18,26 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static google.registry.util.DateTimeUtils.isBeforeOrAt;
 import static google.registry.util.PreconditionsUtils.checkArgumentNotNull;
 
+import com.google.gson.annotations.Expose;
 import google.registry.model.Buildable;
 import google.registry.model.CreateAutoTimestamp;
 import google.registry.model.UpdateAutoTimestampEntity;
+import jakarta.persistence.Access;
+import jakarta.persistence.AccessType;
+import jakarta.persistence.AttributeOverride;
+import jakarta.persistence.AttributeOverrides;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.FetchType;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Index;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.OneToOne;
+import jakarta.persistence.Table;
 import java.util.Optional;
 import javax.annotation.Nullable;
-import javax.persistence.Access;
-import javax.persistence.AccessType;
-import javax.persistence.AttributeOverride;
-import javax.persistence.AttributeOverrides;
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.FetchType;
-import javax.persistence.GeneratedValue;
-import javax.persistence.GenerationType;
-import javax.persistence.Id;
-import javax.persistence.Index;
-import javax.persistence.JoinColumn;
-import javax.persistence.OneToOne;
-import javax.persistence.Table;
 import org.joda.time.DateTime;
 import org.joda.time.Duration;
 
@@ -90,6 +91,7 @@ public final class RegistryLock extends UpdateAutoTimestampEntity implements Bui
 
   // TODO (b/140568328): remove this when everything is in Cloud SQL and we can join on "domain"
   @Column(nullable = false)
+  @Expose
   private String domainName;
 
   /**
@@ -99,8 +101,15 @@ public final class RegistryLock extends UpdateAutoTimestampEntity implements Bui
   @Column(nullable = false)
   private String registrarId;
 
-  /** The POC that performed the action, or null if it was a superuser. */
-  private String registrarPocId;
+  /**
+   * The email address of the user that performed the action, or null if it was a superuser.
+   *
+   * <p>Note: this is misnamed in the database due to historical reasons, where we used the
+   * registrar POC ID as the email address rather than a separate specialized field.
+   */
+  @Column(name = "registrarPocId")
+  @Expose
+  private String registryLockEmail;
 
   /** When the lock is first requested. */
   @AttributeOverrides({
@@ -108,22 +117,23 @@ public final class RegistryLock extends UpdateAutoTimestampEntity implements Bui
         name = "creationTime",
         column = @Column(name = "lockRequestTime", nullable = false))
   })
+  @Expose
   private final CreateAutoTimestamp lockRequestTime = CreateAutoTimestamp.create(null);
 
   /** When the unlock is first requested. */
-  private DateTime unlockRequestTime;
+  @Expose private DateTime unlockRequestTime;
 
   /**
    * When the user has verified the lock. If this field is null, it means the lock has not been
    * verified yet (and thus not been put into effect).
    */
-  private DateTime lockCompletionTime;
+  @Expose private DateTime lockCompletionTime;
 
   /**
    * When the user has verified the unlock of this lock. If this field is null, it means the unlock
    * action has not been verified yet (and has not been put into effect).
    */
-  private DateTime unlockCompletionTime;
+  @Expose private DateTime unlockCompletionTime;
 
   /** The user must provide the random verification code in order to complete the action. */
   @Column(nullable = false)
@@ -134,6 +144,7 @@ public final class RegistryLock extends UpdateAutoTimestampEntity implements Bui
    * this case, the action was performed by a registry admin rather than a registrar.
    */
   @Column(nullable = false)
+  @Expose
   private boolean isSuperuser;
 
   /** The lock that undoes this lock, if this lock has been unlocked and the domain locked again. */
@@ -143,6 +154,7 @@ public final class RegistryLock extends UpdateAutoTimestampEntity implements Bui
   private RegistryLock relock;
 
   /** The duration after which we will re-lock this domain after it is unlocked. */
+  @Column(columnDefinition = "interval")
   private Duration relockDuration;
 
   public String getRepoId() {
@@ -157,8 +169,8 @@ public final class RegistryLock extends UpdateAutoTimestampEntity implements Bui
     return registrarId;
   }
 
-  public String getRegistrarPocId() {
-    return registrarPocId;
+  public String getRegistryLockEmail() {
+    return registryLockEmail;
   }
 
   public DateTime getLockRequestTime() {
@@ -219,7 +231,7 @@ public final class RegistryLock extends UpdateAutoTimestampEntity implements Bui
 
   /** Returns true iff the lock was requested &gt;= 1 hour ago and has not been verified. */
   public boolean isLockRequestExpired(DateTime now) {
-    return !getLockCompletionTime().isPresent()
+    return getLockCompletionTime().isEmpty()
         && isBeforeOrAt(getLockRequestTime(), now.minusHours(1));
   }
 
@@ -227,7 +239,7 @@ public final class RegistryLock extends UpdateAutoTimestampEntity implements Bui
   public boolean isUnlockRequestExpired(DateTime now) {
     Optional<DateTime> unlockRequestTimestamp = getUnlockRequestTime();
     return unlockRequestTimestamp.isPresent()
-        && !getUnlockCompletionTime().isPresent()
+        && getUnlockCompletionTime().isEmpty()
         && isBeforeOrAt(unlockRequestTimestamp.get(), now.minusHours(1));
   }
 
@@ -251,7 +263,7 @@ public final class RegistryLock extends UpdateAutoTimestampEntity implements Bui
       checkArgumentNotNull(getInstance().registrarId, "Registrar ID cannot be null");
       checkArgumentNotNull(getInstance().verificationCode, "Verification code cannot be null");
       checkArgument(
-          getInstance().registrarPocId != null || getInstance().isSuperuser,
+          getInstance().registryLockEmail != null || getInstance().isSuperuser,
           "Registrar POC ID must be provided if superuser is false");
       return super.build();
     }
@@ -271,8 +283,8 @@ public final class RegistryLock extends UpdateAutoTimestampEntity implements Bui
       return this;
     }
 
-    public Builder setRegistrarPocId(String registrarPocId) {
-      getInstance().registrarPocId = registrarPocId;
+    public Builder setRegistryLockEmail(String registryLockEmail) {
+      getInstance().registryLockEmail = registryLockEmail;
       return this;
     }
 

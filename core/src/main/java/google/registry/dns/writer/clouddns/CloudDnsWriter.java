@@ -17,7 +17,6 @@ package google.registry.dns.writer.clouddns;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static google.registry.dns.DnsUtils.getDnsAPlusAAAATtlForHost;
-import static google.registry.model.EppResourceUtils.loadByForeignKey;
 import static google.registry.util.DomainNameUtils.getSecondLevelDomain;
 
 import com.google.api.client.googleapis.json.GoogleJsonError;
@@ -37,6 +36,7 @@ import google.registry.config.RegistryConfig.Config;
 import google.registry.dns.writer.BaseDnsWriter;
 import google.registry.dns.writer.DnsWriter;
 import google.registry.dns.writer.DnsWriterZone;
+import google.registry.model.ForeignKeyUtils;
 import google.registry.model.domain.Domain;
 import google.registry.model.domain.secdns.DomainDsData;
 import google.registry.model.host.Host;
@@ -45,6 +45,8 @@ import google.registry.model.tld.Tlds;
 import google.registry.util.Clock;
 import google.registry.util.Concurrent;
 import google.registry.util.Retrier;
+import jakarta.inject.Inject;
+import jakarta.inject.Named;
 import java.io.IOException;
 import java.net.Inet4Address;
 import java.net.Inet6Address;
@@ -57,8 +59,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Stream;
-import javax.inject.Inject;
-import javax.inject.Named;
 import org.joda.time.Duration;
 
 /**
@@ -123,12 +123,13 @@ public class CloudDnsWriter extends BaseDnsWriter {
     String absoluteDomainName = getAbsoluteHostName(domainName);
 
     // Load the target domain. Note that it can be absent if this domain was just deleted.
-    Optional<Domain> domain = loadByForeignKey(Domain.class, domainName, clock.nowUtc());
+    Optional<Domain> domain =
+        ForeignKeyUtils.loadResource(Domain.class, domainName, clock.nowUtc());
 
     // Return early if no DNS records should be published.
     // desiredRecordsBuilder is populated with an empty set to indicate that all existing records
     // should be deleted.
-    if (!domain.isPresent() || !domain.get().shouldPublishToDns()) {
+    if (domain.isEmpty() || !domain.get().shouldPublishToDns()) {
       desiredRecords.put(absoluteDomainName, ImmutableSet.of());
       return;
     }
@@ -189,10 +190,10 @@ public class CloudDnsWriter extends BaseDnsWriter {
     // Load the target host. Note that it can be absent if this host was just deleted.
     // desiredRecords is populated with an empty set to indicate that all existing records
     // should be deleted.
-    Optional<Host> host = loadByForeignKey(Host.class, hostName, clock.nowUtc());
+    Optional<Host> host = ForeignKeyUtils.loadResource(Host.class, hostName, clock.nowUtc());
 
     // Return early if the host is deleted.
-    if (!host.isPresent()) {
+    if (host.isEmpty()) {
       desiredRecords.put(absoluteHostName, ImmutableSet.of());
       return;
     }
@@ -247,7 +248,7 @@ public class CloudDnsWriter extends BaseDnsWriter {
     Optional<InternetDomainName> tld = Tlds.findTldForName(host);
 
     // Host not managed by our registry, no need to update DNS.
-    if (!tld.isPresent()) {
+    if (tld.isEmpty()) {
       logger.atSevere().log("publishHost called for invalid host '%s'.", hostName);
       return;
     }
@@ -363,8 +364,8 @@ public class CloudDnsWriter extends BaseDnsWriter {
    * <p>This call should be used in conjunction with {@link #getResourceRecordsForDomains} in a
    * get-and-set retry loop.
    *
-   * <p>See {@link "<a href="https://cloud.google.com/dns/troubleshooting">Troubleshoot Cloud
-   * DNS</a>"} for a list of errors produced by the Google Cloud DNS API.
+   * <p>See <a href="https://cloud.google.com/dns/troubleshooting">Troubleshoot Cloud DNS</a> for a
+   * list of errors produced by the Google Cloud DNS API.
    *
    * @throws ZoneStateException if the operation could not be completely successfully because the
    *     records to delete do not exist, already exist or have been modified with different
@@ -401,7 +402,7 @@ public class CloudDnsWriter extends BaseDnsWriter {
       if (err == null || err.getErrors().size() > 1) {
         throw e;
       }
-      String errorReason = err.getErrors().get(0).getReason();
+      String errorReason = err.getErrors().getFirst().getReason();
 
       if (RETRYABLE_EXCEPTION_REASONS.contains(errorReason)) {
         throw new ZoneStateException(errorReason);

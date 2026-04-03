@@ -18,8 +18,8 @@
 # manifest.
 
 if [[ $# -ne 1 ]]; then
- echo "Usage: $0 alpha|crash"
- exit 1
+  echo "Usage: $0 alpha|crash|qa"
+  exit 1
 fi
 
 environment=${1}
@@ -32,15 +32,16 @@ do
   gcloud container clusters get-credentials "${parts[0]}" \
     --project "${project}" --zone "${parts[1]}"
   sed s/GCP_PROJECT/${project}/g "./kubernetes/proxy-deployment-${environment}.yaml" | \
-  kubectl replace -f -
-  kubectl replace -f "./kubernetes/proxy-service.yaml" --force
+  kubectl apply -f -
+  kubectl apply -f "./kubernetes/proxy-service.yaml" --force
   # Alpha does not have canary
   if [[ ${environment} != "alpha" ]]; then
     sed s/GCP_PROJECT/${project}/g "./kubernetes/proxy-deployment-${environment}-canary.yaml" | \
-    kubectl replace -f -
-    kubectl replace -f "./kubernetes/proxy-service-canary.yaml" --force
+    kubectl apply -f -
+    kubectl apply -f "./kubernetes/proxy-service-canary.yaml" --force
   fi
-  # Kills all running pods, new pods created will be pulling the new image.
-  kubectl delete pods --all
+  # Restart all running pods, new pods created will be pulling the new image.
+  kubectl rollout restart deployment/proxy-deployment
+  kubectl rollout restart deployment/proxy-deployment-canary
 done < <(gcloud container clusters list --project ${project} | grep proxy-cluster)
 kubectl config use-context "$current_context"

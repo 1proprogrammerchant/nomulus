@@ -18,21 +18,21 @@ import static com.google.common.net.HttpHeaders.AUTHORIZATION;
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.request.auth.AuthModule.BEARER_PREFIX;
 import static google.registry.request.auth.AuthModule.IAP_HEADER_NAME;
-import static google.registry.request.auth.AuthModule.PROXY_HEADER_NAME;
-import static google.registry.testing.DatabaseHelper.insertInDb;
-import static org.mockito.ArgumentMatchers.eq;
+import static google.registry.testing.DatabaseHelper.createAdminUser;
+import static google.registry.testing.DatabaseHelper.persistResource;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.google.api.client.googleapis.auth.oauth2.GoogleIdToken.Payload;
 import com.google.api.client.json.webtoken.JsonWebSignature;
 import com.google.api.client.json.webtoken.JsonWebSignature.Header;
-import com.google.auth.oauth2.TokenVerifier;
+import com.google.auth.oauth2.GoogleCredentials;
 import com.google.auth.oauth2.TokenVerifier.VerificationException;
 import com.google.common.collect.ImmutableSet;
 import dagger.Component;
 import dagger.Module;
 import dagger.Provides;
+import google.registry.config.CredentialModule.ApplicationDefaultCredential;
 import google.registry.config.RegistryConfig.Config;
 import google.registry.model.console.GlobalRole;
 import google.registry.model.console.User;
@@ -41,8 +41,9 @@ import google.registry.persistence.transaction.JpaTestExtensions;
 import google.registry.request.auth.AuthSettings.AuthLevel;
 import google.registry.request.auth.OidcTokenAuthenticationMechanism.IapOidcAuthenticationMechanism;
 import google.registry.request.auth.OidcTokenAuthenticationMechanism.RegularOidcAuthenticationMechanism;
-import javax.inject.Singleton;
-import javax.servlet.http.HttpServletRequest;
+import google.registry.util.GoogleCredentialsBundle;
+import jakarta.inject.Singleton;
+import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -53,26 +54,23 @@ public class OidcTokenAuthenticationMechanismTest {
 
   private static final String rawToken = "this-token";
   private static final String email = "user@email.test";
+
+  private static final String unknownEmail = "bad-guy@evil.real";
+
   private static final String gaiaId = "gaia-id";
   private static final ImmutableSet<String> serviceAccounts =
       ImmutableSet.of("service@email.test", "email@service.goog");
 
   private final Payload payload = new Payload();
-  private final User user =
-      new User.Builder()
-          .setEmailAddress(email)
-          .setGaiaId(gaiaId)
-          .setUserRoles(
-              new UserRoles.Builder().setIsAdmin(true).setGlobalRole(GlobalRole.FTE).build())
-          .build();
   private final JsonWebSignature jwt =
       new JsonWebSignature(new Header(), payload, new byte[0], new byte[0]);
-  private final TokenVerifier tokenVerifier = mock(TokenVerifier.class);
   private final HttpServletRequest request = mock(HttpServletRequest.class);
 
+  private User user;
   private AuthResult authResult;
   private OidcTokenAuthenticationMechanism authenticationMechanism =
-      new OidcTokenAuthenticationMechanism(serviceAccounts, tokenVerifier, e -> rawToken) {};
+      new OidcTokenAuthenticationMechanism(
+          serviceAccounts, request -> rawToken, (service, token) -> jwt) {};
 
   @RegisterExtension
   public final JpaTestExtensions.JpaUnitTestExtension jpaExtension =
@@ -80,10 +78,10 @@ public class OidcTokenAuthenticationMechanismTest {
 
   @BeforeEach
   void beforeEach() throws Exception {
-    when(tokenVerifier.verify(eq(rawToken))).thenReturn(jwt);
     payload.setEmail(email);
     payload.setSubject(gaiaId);
-    insertInDb(user);
+    user = createAdminUser(email);
+    when(request.getServerName()).thenReturn("frontend.registry.test");
   }
 
   @AfterEach
@@ -93,22 +91,28 @@ public class OidcTokenAuthenticationMechanismTest {
 
   @Test
   void testAuthResultBypass() {
-    OidcTokenAuthenticationMechanism.setAuthResultForTesting(AuthResult.create(AuthLevel.APP));
-    assertThat(authenticationMechanism.authenticate(null))
-        .isEqualTo(AuthResult.create(AuthLevel.APP));
+    OidcTokenAuthenticationMechanism.setAuthResultForTesting(AuthResult.NOT_AUTHENTICATED);
+    assertThat(authenticationMechanism.authenticate(null)).isEqualTo(AuthResult.NOT_AUTHENTICATED);
   }
 
   @Test
   void testAuthenticate_noTokenFromRequest() {
     authenticationMechanism =
-        new OidcTokenAuthenticationMechanism(serviceAccounts, tokenVerifier, e -> null) {};
+        new OidcTokenAuthenticationMechanism(
+            serviceAccounts, e -> null, (service, token) -> jwt) {};
     authResult = authenticationMechanism.authenticate(request);
     assertThat(authResult).isEqualTo(AuthResult.NOT_AUTHENTICATED);
   }
 
   @Test
   void testAuthenticate_invalidToken() throws Exception {
-    when(tokenVerifier.verify(eq(rawToken))).thenThrow(new VerificationException("Bad token"));
+    authenticationMechanism =
+        new OidcTokenAuthenticationMechanism(
+            serviceAccounts,
+            e -> null,
+            (service, token) -> {
+              throw new VerificationException("Bad token");
+            }) {};
     authResult = authenticationMechanism.authenticate(request);
     assertThat(authResult).isEqualTo(AuthResult.NOT_AUTHENTICATED);
   }
@@ -125,7 +129,7 @@ public class OidcTokenAuthenticationMechanismTest {
     authResult = authenticationMechanism.authenticate(request);
     assertThat(authResult.isAuthenticated()).isTrue();
     assertThat(authResult.authLevel()).isEqualTo(AuthLevel.USER);
-    assertThat(authResult.userAuthInfo().get().consoleUser().get()).isEqualTo(user);
+    assertThat(authResult.user().get()).isEqualTo(user);
   }
 
   @Test
@@ -139,23 +143,21 @@ public class OidcTokenAuthenticationMechanismTest {
   @Test
   void testAuthenticate_bothUserAndServiceAccount() throws Exception {
     User serviceUser =
-        new User.Builder()
-            .setEmailAddress("service@email.test")
-            .setGaiaId("service-gaia-id")
-            .setUserRoles(
-                new UserRoles.Builder().setIsAdmin(true).setGlobalRole(GlobalRole.FTE).build())
-            .build();
-    insertInDb(serviceUser);
+        persistResource(
+            new User.Builder()
+                .setEmailAddress("service@email.test")
+                .setUserRoles(
+                    new UserRoles.Builder().setIsAdmin(true).setGlobalRole(GlobalRole.FTE).build())
+                .build());
     payload.setEmail("service@email.test");
     authResult = authenticationMechanism.authenticate(request);
     assertThat(authResult.isAuthenticated()).isTrue();
-    assertThat(authResult.authLevel()).isEqualTo(AuthLevel.USER);
-    assertThat(authResult.userAuthInfo().get().consoleUser().get()).isEqualTo(serviceUser);
+    assertThat(authResult.authLevel()).isEqualTo(AuthLevel.APP);
   }
 
   @Test
   void testAuthenticate_unknownEmailAddress() throws Exception {
-    payload.setEmail("bad-guy@evil.real");
+    payload.setEmail(unknownEmail);
     authResult = authenticationMechanism.authenticate(request);
     assertThat(authResult).isEqualTo(AuthResult.NOT_AUTHENTICATED);
   }
@@ -171,16 +173,10 @@ public class OidcTokenAuthenticationMechanismTest {
   void testRegular_tokenExtractor() throws Exception {
     useRegularOidcMechanism();
     // The token does not have the "Bearer " prefix.
-    when(request.getHeader(PROXY_HEADER_NAME)).thenReturn(rawToken);
+    when(request.getHeader(AUTHORIZATION)).thenReturn(rawToken);
     assertThat(authenticationMechanism.tokenExtractor.extract(request)).isNull();
 
     // The token is in the correct format.
-    when(request.getHeader(PROXY_HEADER_NAME))
-        .thenReturn(String.format("%s%s", BEARER_PREFIX, rawToken));
-    assertThat(authenticationMechanism.tokenExtractor.extract(request)).isEqualTo(rawToken);
-
-    // The token is in the correct format, and under the alternative header.
-    when(request.getHeader(PROXY_HEADER_NAME)).thenReturn(null);
     when(request.getHeader(AUTHORIZATION))
         .thenReturn(String.format("%s%s", BEARER_PREFIX, rawToken));
     assertThat(authenticationMechanism.tokenExtractor.extract(request)).isEqualTo(rawToken);
@@ -232,6 +228,13 @@ public class OidcTokenAuthenticationMechanismTest {
     @Config("oauthClientId")
     String provideOauthClientId() {
       return "client-id";
+    }
+
+    @Provides
+    @Singleton
+    @ApplicationDefaultCredential
+    GoogleCredentialsBundle provideGoogleCredentialBundle() {
+      return GoogleCredentialsBundle.create(GoogleCredentials.newBuilder().build());
     }
   }
 }

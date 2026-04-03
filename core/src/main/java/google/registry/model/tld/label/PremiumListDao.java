@@ -23,7 +23,6 @@ import static google.registry.persistence.transaction.TransactionManagerFactory.
 import static google.registry.util.CollectionUtils.isNullOrEmpty;
 
 import com.github.benmanes.caffeine.cache.LoadingCache;
-import com.google.auto.value.AutoValue;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -45,7 +44,7 @@ import org.joda.money.Money;
  * {@link PremiumList} object in SQL, and caching these entries so that future lookups can be
  * quicker.
  */
-public class PremiumListDao {
+public final class PremiumListDao {
 
   /**
    * In-memory cache for premium lists.
@@ -102,7 +101,7 @@ public class PremiumListDao {
   /**
    * Returns the most recent revision of the PremiumList with the specified name, if it exists.
    *
-   * <p>Note that this does not load <code>PremiumList.labelsToPrices</code>! If you need to check
+   * <p>Note that this does not load {@code PremiumList.labelsToPrices}! If you need to check
    * prices, use {@link #getPremiumPrice}.
    */
   public static Optional<PremiumList> getLatestRevision(String premiumListName) {
@@ -115,7 +114,7 @@ public class PremiumListDao {
    */
   public static Optional<Money> getPremiumPrice(String premiumListName, String label) {
     Optional<PremiumList> maybeLoadedList = getLatestRevision(premiumListName);
-    if (!maybeLoadedList.isPresent()) {
+    if (maybeLoadedList.isEmpty()) {
       return Optional.empty();
     }
     PremiumList loadedList = maybeLoadedList.get();
@@ -134,24 +133,30 @@ public class PremiumListDao {
   }
 
   /** Saves the given premium list (and its premium list entries) to Cloud SQL. */
-  public static PremiumList save(PremiumList premiumList) {
-    tm().transact(
-            () -> {
-              tm().insert(premiumList);
-              tm().getEntityManager().flush(); // This populates the revisionId.
-              long revisionId = premiumList.getRevisionId();
+  public static PremiumList save(PremiumList premiumListToPersist) {
+    PremiumList persisted =
+        tm().transact(
+                () -> {
+                  // Make a new copy in each attempt to insert. See javadoc of the insert method for
+                  // more information.
+                  PremiumList premiumList = premiumListToPersist.asBuilder().build();
+                  tm().insert(premiumList);
+                  tm().getEntityManager().flush(); // This populates the revisionId.
+                  long revisionId = premiumList.getRevisionId();
 
-              if (!isNullOrEmpty(premiumList.getLabelsToPrices())) {
-                ImmutableSet.Builder<PremiumEntry> entries = new ImmutableSet.Builder<>();
-                premiumList
-                    .getLabelsToPrices()
-                    .forEach(
-                        (key, value) -> entries.add(PremiumEntry.create(revisionId, value, key)));
-                tm().insertAll(entries.build());
-              }
-            });
-    premiumListCache.invalidate(premiumList.getName());
-    return premiumList;
+                  if (!isNullOrEmpty(premiumList.getLabelsToPrices())) {
+                    ImmutableSet.Builder<PremiumEntry> entries = new ImmutableSet.Builder<>();
+                    premiumList
+                        .getLabelsToPrices()
+                        .forEach(
+                            (key, value) ->
+                                entries.add(PremiumEntry.create(revisionId, value, key)));
+                    tm().insertAll(entries.build());
+                  }
+                  return premiumList;
+                });
+    premiumListCache.invalidate(persisted.getName());
+    return persisted;
   }
 
   public static void delete(PremiumList premiumList) {
@@ -169,7 +174,7 @@ public class PremiumListDao {
   }
 
   private static Optional<PremiumList> getLatestRevisionUncached(String premiumListName) {
-    return tm().transact(
+    return tm().reTransact(
             () ->
                 tm().query(
                         "FROM PremiumList WHERE name = :name ORDER BY revisionId DESC",
@@ -197,10 +202,10 @@ public class PremiumListDao {
 
   /**
    * Loads the price for the given revisionId + label combination. Note that this does a database
-   * retrieval so it should only be done in a cached context.
+   * retrieval, so it should only be done in a cached context.
    */
   static Optional<BigDecimal> getPriceForLabelUncached(RevisionIdAndLabel revisionIdAndLabel) {
-    return tm().transact(
+    return tm().reTransact(
             () ->
                 tm().query(
                         "SELECT pe.price FROM PremiumEntry pe WHERE pe.revisionId = :revisionId"
@@ -236,14 +241,10 @@ public class PremiumListDao {
         .collect(toImmutableList());
   }
 
-  @AutoValue
-  abstract static class RevisionIdAndLabel {
-    abstract long revisionId();
-
-    abstract String label();
+  record RevisionIdAndLabel(long revisionId, String label) {
 
     static RevisionIdAndLabel create(long revisionId, String label) {
-      return new AutoValue_PremiumListDao_RevisionIdAndLabel(revisionId, label);
+      return new RevisionIdAndLabel(revisionId, label);
     }
   }
 

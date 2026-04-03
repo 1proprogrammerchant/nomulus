@@ -15,11 +15,11 @@
 package google.registry.request;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.common.truth.Truth8.assertThat;
 import static google.registry.request.Action.Method.GET;
 import static google.registry.request.Action.Method.POST;
-import static google.registry.request.auth.Auth.AUTH_API_ADMIN;
+import static google.registry.request.auth.Auth.AUTH_ADMIN;
 import static google.registry.request.auth.Auth.AUTH_PUBLIC;
+import static google.registry.request.auth.AuthResult.NOT_AUTHENTICATED;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -28,18 +28,18 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
-import com.google.appengine.api.users.User;
 import com.google.common.testing.NullPointerTester;
+import google.registry.model.console.User;
+import google.registry.model.console.UserRoles;
 import google.registry.request.HttpException.ServiceUnavailableException;
 import google.registry.request.auth.AuthResult;
 import google.registry.request.auth.AuthSettings.AuthLevel;
 import google.registry.request.auth.RequestAuthenticator;
-import google.registry.request.auth.UserAuthInfo;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.Optional;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -48,7 +48,7 @@ import org.junit.jupiter.api.Test;
 public final class RequestHandlerTest {
 
   @Action(
-      service = Action.Service.DEFAULT,
+      service = Action.Service.FRONTEND,
       path = "/bumblebee",
       method = {GET, POST},
       isPrefix = true,
@@ -59,7 +59,7 @@ public final class RequestHandlerTest {
   }
 
   @Action(
-      service = Action.Service.DEFAULT,
+      service = Action.Service.FRONTEND,
       path = "/sloth",
       method = POST,
       automaticallyPrintOk = true,
@@ -70,7 +70,7 @@ public final class RequestHandlerTest {
   }
 
   @Action(
-      service = Action.Service.DEFAULT,
+      service = Action.Service.FRONTEND,
       path = "/safe-sloth",
       method = {GET, POST},
       auth = AUTH_PUBLIC)
@@ -79,7 +79,7 @@ public final class RequestHandlerTest {
     public void run() {}
   }
 
-  @Action(service = Action.Service.DEFAULT, path = "/fail", auth = AUTH_PUBLIC)
+  @Action(service = Action.Service.FRONTEND, path = "/fail", auth = AUTH_PUBLIC)
   public static final class FailTask implements Runnable {
     @Override
     public void run() {
@@ -87,7 +87,7 @@ public final class RequestHandlerTest {
     }
   }
 
-  @Action(service = Action.Service.DEFAULT, path = "/failAtConstruction", auth = AUTH_PUBLIC)
+  @Action(service = Action.Service.FRONTEND, path = "/failAtConstruction", auth = AUTH_PUBLIC)
   public static final class FailAtConstructionTask implements Runnable {
     FailAtConstructionTask() {
       throw new ServiceUnavailableException("Fail at construction");
@@ -112,7 +112,7 @@ public final class RequestHandlerTest {
     }
   }
 
-  @Action(service = Action.Service.DEFAULT, path = "/auth/none", auth = AUTH_PUBLIC, method = GET)
+  @Action(service = Action.Service.FRONTEND, path = "/auth/none", auth = AUTH_PUBLIC, method = GET)
   public class AuthNoneAction extends AuthBase {
     AuthNoneAction(AuthResult authResult) {
       super(authResult);
@@ -120,9 +120,9 @@ public final class RequestHandlerTest {
   }
 
   @Action(
-      service = Action.Service.DEFAULT,
+      service = Action.Service.FRONTEND,
       path = "/auth/adminUser",
-      auth = AUTH_API_ADMIN,
+      auth = AUTH_ADMIN,
       method = GET)
   public class AuthAdminUserAction extends AuthBase {
     AuthAdminUserAction(AuthResult authResult) {
@@ -192,13 +192,17 @@ public final class RequestHandlerTest {
   private final StringWriter httpOutput = new StringWriter();
   private RequestHandler<Component> handler;
   private AuthResult providedAuthResult = null;
-  private final User testUser = new User("test@example.com", "test@example.com");
+  private final User testUser =
+      new User.Builder()
+          .setEmailAddress("test@example.com")
+          .setUserRoles(new UserRoles.Builder().setIsAdmin(true).build())
+          .build();
 
   @BeforeEach
   void beforeEach() throws Exception {
     // Initialize here, not inline, so that we pick up the mocked UserService.
     handler =
-        RequestHandler.createForTest(
+        RequestHandler.create(
             Component.class,
             () ->
                 new Builder() {
@@ -209,6 +213,7 @@ public final class RequestHandlerTest {
                   }
                 },
             requestAuthenticator);
+    when(req.getServerName()).thenReturn("frontend.registry.test");
     when(rsp.getWriter()).thenReturn(new PrintWriter(httpOutput));
     handler.requestMetrics = requestMetrics;
   }
@@ -228,7 +233,7 @@ public final class RequestHandlerTest {
     when(req.getMethod()).thenReturn("GET");
     when(req.getRequestURI()).thenReturn("/bumblebee");
     when(requestAuthenticator.authorize(AUTH_PUBLIC.authSettings(), req))
-        .thenReturn(Optional.of(AuthResult.create(AuthLevel.NONE)));
+        .thenReturn(Optional.of(NOT_AUTHENTICATED));
 
     handler.handleRequest(req, rsp);
 
@@ -242,7 +247,7 @@ public final class RequestHandlerTest {
     when(req.getMethod()).thenReturn("POST");
     when(req.getRequestURI()).thenReturn("/bumblebee");
     when(requestAuthenticator.authorize(AUTH_PUBLIC.authSettings(), req))
-        .thenReturn(Optional.of(AuthResult.create(AuthLevel.NONE)));
+        .thenReturn(Optional.of(NOT_AUTHENTICATED));
 
     handler.handleRequest(req, rsp);
 
@@ -255,7 +260,7 @@ public final class RequestHandlerTest {
     when(req.getMethod()).thenReturn("GET");
     when(req.getRequestURI()).thenReturn("/bumblebee/hive");
     when(requestAuthenticator.authorize(AUTH_PUBLIC.authSettings(), req))
-        .thenReturn(Optional.of(AuthResult.create(AuthLevel.NONE)));
+        .thenReturn(Optional.of(NOT_AUTHENTICATED));
 
     handler.handleRequest(req, rsp);
 
@@ -268,7 +273,7 @@ public final class RequestHandlerTest {
     when(req.getMethod()).thenReturn("POST");
     when(req.getRequestURI()).thenReturn("/sloth");
     when(requestAuthenticator.authorize(AUTH_PUBLIC.authSettings(), req))
-        .thenReturn(Optional.of(AuthResult.create(AuthLevel.NONE)));
+        .thenReturn(Optional.of(NOT_AUTHENTICATED));
 
     handler.handleRequest(req, rsp);
 
@@ -284,7 +289,7 @@ public final class RequestHandlerTest {
     when(req.getMethod()).thenReturn("POST");
     when(req.getRequestURI()).thenReturn("/sloth/nest");
     when(requestAuthenticator.authorize(AUTH_PUBLIC.authSettings(), req))
-        .thenReturn(Optional.of(AuthResult.create(AuthLevel.NONE)));
+        .thenReturn(Optional.of(NOT_AUTHENTICATED));
 
     handler.handleRequest(req, rsp);
 
@@ -296,7 +301,7 @@ public final class RequestHandlerTest {
     when(req.getMethod()).thenReturn("GET");
     when(req.getRequestURI()).thenReturn("/fail");
     when(requestAuthenticator.authorize(AUTH_PUBLIC.authSettings(), req))
-        .thenReturn(Optional.of(AuthResult.create(AuthLevel.NONE)));
+        .thenReturn(Optional.of(NOT_AUTHENTICATED));
 
     handler.handleRequest(req, rsp);
 
@@ -311,7 +316,7 @@ public final class RequestHandlerTest {
     when(req.getMethod()).thenReturn("GET");
     when(req.getRequestURI()).thenReturn("/failAtConstruction");
     when(requestAuthenticator.authorize(AUTH_PUBLIC.authSettings(), req))
-        .thenReturn(Optional.of(AuthResult.create(AuthLevel.NONE)));
+        .thenReturn(Optional.of(NOT_AUTHENTICATED));
 
     handler.handleRequest(req, rsp);
 
@@ -324,7 +329,7 @@ public final class RequestHandlerTest {
     when(req.getMethod()).thenReturn("GET");
     when(req.getRequestURI()).thenReturn("/bogus");
     when(requestAuthenticator.authorize(AUTH_PUBLIC.authSettings(), req))
-        .thenReturn(Optional.of(AuthResult.create(AuthLevel.NONE)));
+        .thenReturn(Optional.of(NOT_AUTHENTICATED));
 
     handler.handleRequest(req, rsp);
 
@@ -336,7 +341,7 @@ public final class RequestHandlerTest {
     when(req.getMethod()).thenReturn("POST");
     when(req.getRequestURI()).thenReturn("/fail");
     when(requestAuthenticator.authorize(AUTH_PUBLIC.authSettings(), req))
-        .thenReturn(Optional.of(AuthResult.create(AuthLevel.NONE)));
+        .thenReturn(Optional.of(NOT_AUTHENTICATED));
 
     handler.handleRequest(req, rsp);
 
@@ -348,7 +353,7 @@ public final class RequestHandlerTest {
     when(req.getMethod()).thenReturn("FIREAWAY");
     when(req.getRequestURI()).thenReturn("/fail");
     when(requestAuthenticator.authorize(AUTH_PUBLIC.authSettings(), req))
-        .thenReturn(Optional.of(AuthResult.create(AuthLevel.NONE)));
+        .thenReturn(Optional.of(NOT_AUTHENTICATED));
 
     handler.handleRequest(req, rsp);
 
@@ -364,7 +369,7 @@ public final class RequestHandlerTest {
     when(req.getMethod()).thenReturn("get");
     when(req.getRequestURI()).thenReturn("/bumblebee");
     when(requestAuthenticator.authorize(AUTH_PUBLIC.authSettings(), req))
-        .thenReturn(Optional.of(AuthResult.create(AuthLevel.NONE)));
+        .thenReturn(Optional.of(NOT_AUTHENTICATED));
 
     handler.handleRequest(req, rsp);
 
@@ -386,7 +391,7 @@ public final class RequestHandlerTest {
     when(req.getMethod()).thenReturn("POST");
     when(req.getRequestURI()).thenReturn("/safe-sloth");
     when(requestAuthenticator.authorize(AUTH_PUBLIC.authSettings(), req))
-        .thenReturn(Optional.of(AuthResult.create(AuthLevel.NONE)));
+        .thenReturn(Optional.of(NOT_AUTHENTICATED));
 
     handler.handleRequest(req, rsp);
 
@@ -399,7 +404,7 @@ public final class RequestHandlerTest {
     when(req.getMethod()).thenReturn("GET");
     when(req.getRequestURI()).thenReturn("/safe-sloth");
     when(requestAuthenticator.authorize(AUTH_PUBLIC.authSettings(), req))
-        .thenReturn(Optional.of(AuthResult.create(AuthLevel.NONE)));
+        .thenReturn(Optional.of(NOT_AUTHENTICATED));
 
     handler.handleRequest(req, rsp);
 
@@ -412,13 +417,13 @@ public final class RequestHandlerTest {
     when(req.getMethod()).thenReturn("GET");
     when(req.getRequestURI()).thenReturn("/auth/none");
     when(requestAuthenticator.authorize(AUTH_PUBLIC.authSettings(), req))
-        .thenReturn(Optional.of(AuthResult.create(AuthLevel.NONE)));
+        .thenReturn(Optional.of(NOT_AUTHENTICATED));
 
     handler.handleRequest(req, rsp);
 
     assertThat(providedAuthResult).isNotNull();
     assertThat(providedAuthResult.authLevel()).isEqualTo(AuthLevel.NONE);
-    assertThat(providedAuthResult.userAuthInfo()).isEmpty();
+    assertThat(providedAuthResult.user()).isEmpty();
     assertMetric("/auth/none", GET, AuthLevel.NONE, true);
   }
 
@@ -426,7 +431,7 @@ public final class RequestHandlerTest {
   void testAuthNeeded_failure() throws Exception {
     when(req.getMethod()).thenReturn("GET");
     when(req.getRequestURI()).thenReturn("/auth/adminUser");
-    when(requestAuthenticator.authorize(AUTH_API_ADMIN.authSettings(), req))
+    when(requestAuthenticator.authorize(AUTH_ADMIN.authSettings(), req))
         .thenReturn(Optional.empty());
 
     handler.handleRequest(req, rsp);
@@ -439,17 +444,15 @@ public final class RequestHandlerTest {
   void testAuthNeeded_success() throws Exception {
     when(req.getMethod()).thenReturn("GET");
     when(req.getRequestURI()).thenReturn("/auth/adminUser");
-    when(requestAuthenticator.authorize(AUTH_API_ADMIN.authSettings(), req))
-        .thenReturn(
-            Optional.of(AuthResult.create(AuthLevel.USER, UserAuthInfo.create(testUser, true))));
+    when(requestAuthenticator.authorize(AUTH_ADMIN.authSettings(), req))
+        .thenReturn(Optional.of(AuthResult.createUser(testUser)));
 
     handler.handleRequest(req, rsp);
 
     assertThat(providedAuthResult).isNotNull();
     assertThat(providedAuthResult.authLevel()).isEqualTo(AuthLevel.USER);
-    assertThat(providedAuthResult.userAuthInfo()).isPresent();
-    assertThat(providedAuthResult.userAuthInfo().get().appEngineUser()).hasValue(testUser);
-    assertThat(providedAuthResult.userAuthInfo().get().oauthTokenInfo()).isEmpty();
+    assertThat(providedAuthResult.user()).isPresent();
+    assertThat(providedAuthResult.user()).hasValue(testUser);
     assertMetric("/auth/adminUser", GET, AuthLevel.USER, true);
   }
 }

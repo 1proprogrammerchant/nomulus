@@ -14,11 +14,14 @@
 
 package google.registry.request;
 
+
+import google.registry.config.RegistryConfig;
 import google.registry.request.auth.Auth;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
+import java.net.URL;
 
 /** Annotation for {@link Runnable} actions accepting HTTP requests from {@link RequestHandler}. */
 @Retention(RetentionPolicy.RUNTIME)
@@ -26,14 +29,19 @@ import java.lang.annotation.Target;
 public @interface Action {
 
   /** HTTP methods recognized by the request processor. */
-  enum Method { GET, HEAD, POST }
+  enum Method {
+    GET,
+    HEAD,
+    POST,
+    PUT,
+    DELETE
+  }
 
-  /** App Engine services supported by the request processor. */
   enum Service {
-    DEFAULT("default"),
-    TOOLS("tools"),
+    FRONTEND("frontend"),
     BACKEND("backend"),
-    PUBAPI("pubapi");
+    PUBAPI("pubapi"),
+    CONSOLE("console");
 
     private final String serviceId;
 
@@ -41,13 +49,16 @@ public @interface Action {
       this.serviceId = serviceId;
     }
 
-    /** Returns the actual service id in App Engine. */
     public String getServiceId() {
       return serviceId;
     }
+
+    public URL getServiceUrl() {
+      return RegistryConfig.getServiceUrl(this);
+    }
   }
 
-  /** Which App Engine service this action lives on. */
+  /** Which GKE service this action lives on. */
   Service service();
 
   /** HTTP path to serve the action from. The path components must be percent-escaped. */

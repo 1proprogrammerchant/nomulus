@@ -33,16 +33,12 @@ import google.registry.proxy.EppProtocolModule.EppProtocol;
 import google.registry.proxy.HealthCheckProtocolModule.HealthCheckProtocol;
 import google.registry.proxy.HttpsRelayProtocolModule.HttpsRelayProtocol;
 import google.registry.proxy.ProxyConfig.Environment;
-import google.registry.proxy.WebWhoisProtocolsModule.HttpWhoisProtocol;
-import google.registry.proxy.WhoisProtocolModule.WhoisProtocol;
 import google.registry.proxy.handler.BackendMetricsHandler;
 import google.registry.proxy.handler.FrontendMetricsHandler;
 import google.registry.proxy.handler.ProxyProtocolHandler;
 import google.registry.proxy.handler.QuotaHandler.EppQuotaHandler;
-import google.registry.proxy.handler.QuotaHandler.WhoisQuotaHandler;
 import google.registry.proxy.handler.RelayHandler.FullHttpRequestRelayHandler;
 import google.registry.proxy.handler.RelayHandler.FullHttpResponseRelayHandler;
-import google.registry.proxy.handler.WebWhoisRedirectHandler;
 import google.registry.testing.FakeClock;
 import google.registry.util.Clock;
 import io.netty.channel.Channel;
@@ -52,22 +48,23 @@ import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.logging.LoggingHandler;
 import io.netty.handler.ssl.SslProvider;
 import io.netty.handler.timeout.ReadTimeoutHandler;
+import jakarta.inject.Named;
+import jakarta.inject.Provider;
+import jakarta.inject.Singleton;
 import java.time.Duration;
+import java.util.Random;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
-import javax.inject.Named;
-import javax.inject.Provider;
-import javax.inject.Singleton;
 import org.junit.jupiter.api.BeforeEach;
 
 /**
  * Base class for end-to-end tests of a {@link Protocol}.
  *
- * <p>The end-to-end tests ensures that the business logic that a {@link Protocol} defines are
+ * <p>The end-to-end tests ensure that the business logic that a {@link Protocol} defines are
  * correctly performed by various handlers attached to its pipeline. Non-business essential handlers
  * should be excluded.
  *
@@ -91,7 +88,7 @@ public abstract class ProtocolModuleTest {
           // The PROXY protocol is only used when the proxy is behind the GCP load balancer. It is
           // not part of any business logic.
           ProxyProtocolHandler.class,
-          // SSL is part of the business logic for some protocol (EPP for example), but its
+          // SSL is part of the business logic for some protocol (EPP, for example), but its
           // impact is isolated. Including it makes tests much more complicated. It should be tested
           // separately in its own unit tests.
           SslClientInitializer.class,
@@ -101,18 +98,12 @@ public abstract class ProtocolModuleTest {
           // tested separately in their respective unit tests.
           FullHttpRequestRelayHandler.class,
           FullHttpResponseRelayHandler.class,
-          // This handler is tested in its own unit tests. It is installed in web whois redirect
-          // protocols. The end-to-end tests for the rest of the handlers in its pipeline need to
-          // be able to emit incoming requests out of the channel for assertions. Therefore, this
-          // handler is removed from the pipeline.
-          WebWhoisRedirectHandler.class,
           // The rest are not part of business logic and do not need to be tested, obviously.
           LoggingHandler.class,
           // Metrics instrumentation is tested separately.
           BackendMetricsHandler.class,
           FrontendMetricsHandler.class,
           // Quota management is tested separately.
-          WhoisQuotaHandler.class,
           EppQuotaHandler.class,
           ReadTimeoutHandler.class);
 
@@ -152,7 +143,7 @@ public abstract class ProtocolModuleTest {
   void initializeChannel(Consumer<Channel> initializer) {
     channel =
         new EmbeddedChannel(
-            new ChannelInitializer<Channel>() {
+            new ChannelInitializer<>() {
               @Override
               protected void initChannel(Channel ch) {
                 initializer.accept(ch);
@@ -189,16 +180,11 @@ public abstract class ProtocolModuleTest {
       modules = {
         TestModule.class,
         CertificateSupplierModule.class,
-        WhoisProtocolModule.class,
-        WebWhoisProtocolsModule.class,
         EppProtocolModule.class,
         HealthCheckProtocolModule.class,
         HttpsRelayProtocolModule.class
       })
   interface TestComponent {
-
-    @WhoisProtocol
-    ImmutableList<Provider<? extends ChannelHandler>> whoisHandlers();
 
     @EppProtocol
     ImmutableList<Provider<? extends ChannelHandler>> eppHandlers();
@@ -208,9 +194,6 @@ public abstract class ProtocolModuleTest {
 
     @HttpsRelayProtocol
     ImmutableList<Provider<? extends ChannelHandler>> httpsRelayHandlers();
-
-    @HttpWhoisProtocol
-    ImmutableList<Provider<? extends ChannelHandler>> httpWhoisHandlers();
   }
 
   /**
@@ -218,8 +201,8 @@ public abstract class ProtocolModuleTest {
    *
    * <p>Most of the binding provided in this module should be either a fake, or a {@link
    * ChannelHandler} that is excluded, and annotated with {@code @Singleton}. This module acts as a
-   * replacement for {@link ProxyModule} used in production component. Providing a handler that is
-   * part of the business logic of a {@link Protocol} from this module is a sign that the binding
+   * replacement for {@link ProxyModule} used in the production component. Providing a handler that
+   * is part of the business logic of a {@link Protocol} from this module is a sign that the binding
    * should be provided in the respective {@code ProtocolModule} instead.
    */
   @Module
@@ -259,6 +242,13 @@ public abstract class ProtocolModuleTest {
     @Named("idToken")
     static Supplier<String> provideFakeIdToken() {
       return Suppliers.ofInstance("fake.test.id.token");
+    }
+
+    @Singleton
+    @Provides
+    @Named("canary")
+    static boolean provideIsCanary() {
+      return false;
     }
 
     @Singleton
@@ -305,13 +295,40 @@ public abstract class ProtocolModuleTest {
       return Duration.ofHours(1);
     }
 
+    @Singleton
+    @Provides
+    @Named("frontendMetricsRatio")
+    static double provideFrontendMetricsRatio() {
+      return 1.0;
+    }
+
+    @Singleton
+    @Provides
+    @Named("backendMetricsRatio")
+    static double providebackendMetricsRatio() {
+      return 1.0;
+    }
+
+    @Singleton
+    @Provides
+    static Random provideRandom() {
+      return new Random();
+    }
+
     // This method is only here to satisfy Dagger binding, but is never used. In test environment,
-    // it is the self-signed certificate and its key that end up being used.
+    // it is the self-signed certificate and its key that ends up being used.
     @Singleton
     @Provides
     @Named("pemBytes")
     static byte[] providePemBytes() {
       return new byte[0];
+    }
+
+    @Singleton
+    @Provides
+    @HttpsRelayProtocol
+    static boolean provideLocalRelay() {
+      return false;
     }
   }
 }

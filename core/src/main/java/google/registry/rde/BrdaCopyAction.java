@@ -36,11 +36,11 @@ import google.registry.request.HttpException.NoContentException;
 import google.registry.request.Parameter;
 import google.registry.request.RequestParameters;
 import google.registry.request.auth.Auth;
+import jakarta.inject.Inject;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.Optional;
-import javax.inject.Inject;
 import org.bouncycastle.openpgp.PGPKeyPair;
 import org.bouncycastle.openpgp.PGPPrivateKey;
 import org.bouncycastle.openpgp.PGPPublicKey;
@@ -66,7 +66,7 @@ import org.joda.time.DateTime;
     path = BrdaCopyAction.PATH,
     method = POST,
     automaticallyPrintOk = true,
-    auth = Auth.AUTH_API_ADMIN)
+    auth = Auth.AUTH_ADMIN)
 public final class BrdaCopyAction implements Runnable {
 
   public static final String PATH = "/_dr/task/brdaCopy";

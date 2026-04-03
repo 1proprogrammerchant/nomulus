@@ -17,9 +17,9 @@ package google.registry.export;
 import static com.google.common.base.Strings.isNullOrEmpty;
 import static com.google.common.net.MediaType.PLAIN_TEXT_UTF_8;
 import static google.registry.request.Action.Method.POST;
+import static jakarta.servlet.http.HttpServletResponse.SC_INTERNAL_SERVER_ERROR;
+import static jakarta.servlet.http.HttpServletResponse.SC_OK;
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static javax.servlet.http.HttpServletResponse.SC_INTERNAL_SERVER_ERROR;
-import static javax.servlet.http.HttpServletResponse.SC_OK;
 
 import com.google.common.flogger.FluentLogger;
 import com.google.common.net.MediaType;
@@ -30,19 +30,19 @@ import google.registry.request.RequestParameters;
 import google.registry.request.Response;
 import google.registry.request.auth.Auth;
 import google.registry.storage.drive.DriveConnection;
-import javax.inject.Inject;
+import jakarta.inject.Inject;
 
 /** Action that exports the publicly viewable reserved terms list for a TLD to Google Drive. */
 @Action(
     service = Action.Service.BACKEND,
     path = "/_dr/task/exportReservedTerms",
     method = POST,
-    auth = Auth.AUTH_API_ADMIN)
+    auth = Auth.AUTH_ADMIN)
 public class ExportReservedTermsAction implements Runnable {
 
   private static final FluentLogger logger = FluentLogger.forEnclosingClass();
   static final MediaType EXPORT_MIME_TYPE = MediaType.PLAIN_TEXT_UTF_8;
-  static final String RESERVED_TERMS_FILENAME = "reserved_terms.txt";
+  static final String RESERVED_TERMS_FILENAME_FORMAT = "reserved_terms_%s.txt";
 
   @Inject DriveConnection driveConnection;
   @Inject ExportUtils exportUtils;
@@ -78,7 +78,7 @@ public class ExportReservedTermsAction implements Runnable {
       } else {
         resultMsg =
             driveConnection.createOrUpdateFile(
-                RESERVED_TERMS_FILENAME,
+                String.format(RESERVED_TERMS_FILENAME_FORMAT, tldStr),
                 EXPORT_MIME_TYPE,
                 tld.getDriveFolderId(),
                 exportUtils.exportReservedTerms(tld).getBytes(UTF_8));

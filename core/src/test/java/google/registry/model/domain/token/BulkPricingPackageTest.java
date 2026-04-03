@@ -21,15 +21,16 @@ import static google.registry.testing.DatabaseHelper.createTld;
 import static google.registry.testing.DatabaseHelper.persistResource;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import com.google.common.collect.ImmutableSet;
 import google.registry.model.EntityTestCase;
 import google.registry.model.billing.BillingBase.RenewalPriceBehavior;
+import google.registry.model.domain.fee.FeeQueryCommandExtensionItem.CommandName;
 import google.registry.model.domain.token.AllocationToken.TokenType;
 import org.joda.money.CurrencyUnit;
 import org.joda.money.Money;
 import org.joda.time.DateTime;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.testcontainers.shaded.com.google.common.collect.ImmutableSet;
 
 /** Unit tests for {@link BulkPricingPackage}. */
 public class BulkPricingPackageTest extends EntityTestCase {
@@ -54,7 +55,9 @@ public class BulkPricingPackageTest extends EntityTestCase {
                 .setAllowedTlds(ImmutableSet.of("foo"))
                 .setAllowedRegistrarIds(ImmutableSet.of("TheRegistrar"))
                 .setRenewalPriceBehavior(RenewalPriceBehavior.SPECIFIED)
-                .setDiscountFraction(1)
+                .setRenewalPrice(Money.of(CurrencyUnit.USD, 0))
+                .setAllowedEppActions(ImmutableSet.of(CommandName.CREATE))
+                .setDiscountFraction(1.0)
                 .build());
 
     BulkPricingPackage bulkPricingPackage =
@@ -82,7 +85,7 @@ public class BulkPricingPackageTest extends EntityTestCase {
                 .setCreationTimeForTest(DateTime.parse("2010-11-12T05:00:00Z"))
                 .setAllowedTlds(ImmutableSet.of("foo"))
                 .setAllowedRegistrarIds(ImmutableSet.of("TheRegistrar"))
-                .setDiscountFraction(1)
+                .setDiscountFraction(1.0)
                 .build());
 
     IllegalArgumentException thrown =

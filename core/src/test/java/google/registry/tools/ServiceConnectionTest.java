@@ -15,24 +15,47 @@
 package google.registry.tools;
 
 import static com.google.common.truth.Truth.assertThat;
-import static google.registry.request.Action.Service.DEFAULT;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
+import com.google.api.client.http.GenericUrl;
+import com.google.api.client.http.HttpHeaders;
+import com.google.api.client.http.HttpRequest;
+import com.google.api.client.http.HttpRequestFactory;
+import com.google.api.client.http.HttpResponse;
+import com.google.common.collect.ImmutableMap;
+import google.registry.request.Action.Service;
+import java.io.ByteArrayInputStream;
 import org.junit.jupiter.api.Test;
 
 /** Unit tests for {@link google.registry.tools.ServiceConnection}. */
 public class ServiceConnectionTest {
 
   @Test
-  void testServerUrl_notCanary() {
-    ServiceConnection connection = new ServiceConnection().withService(DEFAULT, false);
+  void testSuccess_serverUrl_notCanary() {
+    ServiceConnection connection =
+        new ServiceConnection(false, null).withService(Service.FRONTEND, false);
     String serverUrl = connection.getServer().toString();
-    assertThat(serverUrl).isEqualTo("https://default.example.com"); // See default-config.yaml
+    assertThat(serverUrl).isEqualTo("https://frontend.registry.test"); // See default-config.yaml
   }
 
   @Test
-  void testServerUrl_canary() {
-    ServiceConnection connection = new ServiceConnection().withService(DEFAULT, true);
+  void testSuccess_serverUrl_gke_canary() throws Exception {
+    HttpRequestFactory factory = mock(HttpRequestFactory.class);
+    HttpRequest request = mock(HttpRequest.class);
+    HttpHeaders headers = mock(HttpHeaders.class);
+    HttpResponse response = mock(HttpResponse.class);
+    when(request.getHeaders()).thenReturn(headers);
+    when(factory.buildGetRequest(any(GenericUrl.class))).thenReturn(request);
+    when(request.execute()).thenReturn(response);
+    when(response.getContent()).thenReturn(ByteArrayInputStream.nullInputStream());
+    ServiceConnection connection =
+        new ServiceConnection(false, factory).withService(Service.PUBAPI, true);
     String serverUrl = connection.getServer().toString();
-    assertThat(serverUrl).isEqualTo("https://nomulus-dot-default.example.com");
+    assertThat(serverUrl).isEqualTo("https://pubapi.registry.test");
+    connection.sendGetRequest("/path", ImmutableMap.of());
+    verify(headers).set("canary", "true");
   }
 }

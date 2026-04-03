@@ -22,7 +22,6 @@ import static google.registry.flows.FlowUtils.unmarshalEpp;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.flogger.FluentLogger;
 import google.registry.flows.FlowModule.EppExceptionInProviderException;
@@ -33,8 +32,8 @@ import google.registry.model.eppoutput.EppResponse;
 import google.registry.model.eppoutput.Result;
 import google.registry.model.eppoutput.Result.Code;
 import google.registry.monitoring.whitebox.EppMetric;
+import jakarta.inject.Inject;
 import java.util.Optional;
-import javax.inject.Inject;
 import org.json.simple.JSONValue;
 
 /**
@@ -45,7 +44,7 @@ import org.json.simple.JSONValue;
 public final class EppController {
 
   private static final FluentLogger logger = FluentLogger.forEnclosingClass();
-  private static final String LOG_SEPARATOR = Strings.repeat("=", 40);
+  private static final String LOG_SEPARATOR = "=".repeat(40);
 
   @Inject FlowComponent.Builder flowComponentBuilder;
   @Inject EppMetric.Builder eppMetricBuilder;

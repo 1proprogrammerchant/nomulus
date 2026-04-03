@@ -16,7 +16,6 @@ package google.registry.model.tld.label;
 
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.common.truth.Truth8.assertThat;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
 import static google.registry.testing.DatabaseHelper.newTld;
 import static google.registry.testing.DatabaseHelper.persistResource;
@@ -32,10 +31,12 @@ import google.registry.persistence.transaction.JpaTestExtensions;
 import google.registry.persistence.transaction.JpaTestExtensions.JpaIntegrationWithCoverageExtension;
 import google.registry.testing.FakeClock;
 import google.registry.testing.TestCacheExtension;
+import jakarta.persistence.OptimisticLockException;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.IntStream;
 import org.joda.money.CurrencyUnit;
 import org.joda.money.Money;
@@ -84,6 +85,27 @@ public class PremiumListDaoTest {
   @Test
   void saveNew_worksSuccessfully() {
     PremiumListDao.save(testList);
+    tm().transact(
+            () -> {
+              Optional<PremiumList> persistedListOpt = PremiumListDao.getLatestRevision("testname");
+              assertThat(persistedListOpt).isPresent();
+              PremiumList persistedList = persistedListOpt.get();
+              assertThat(persistedList.getLabelsToPrices()).containsExactlyEntriesIn(TEST_PRICES);
+              assertThat(persistedList.getCreationTimestamp()).isEqualTo(fakeClock.nowUtc());
+            });
+  }
+
+  @Test
+  void saveNew_retry_success() {
+    AtomicBoolean isFirstAttempt = new AtomicBoolean(true);
+    tm().transact(
+            () -> {
+              PremiumListDao.save(testList);
+              if (isFirstAttempt.get()) {
+                isFirstAttempt.set(false);
+                throw new OptimisticLockException();
+              }
+            });
     tm().transact(
             () -> {
               Optional<PremiumList> persistedListOpt = PremiumListDao.getLatestRevision("testname");

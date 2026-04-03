@@ -31,13 +31,13 @@ import google.registry.model.smd.SignedMark;
 import google.registry.model.smd.SignedMarkRevocationList;
 import google.registry.tmch.TmchXmlSignature;
 import google.registry.tmch.TmchXmlSignature.CertificateSignatureException;
+import jakarta.inject.Inject;
 import java.io.IOException;
 import java.security.GeneralSecurityException;
 import java.security.SignatureException;
 import java.security.cert.CertificateExpiredException;
 import java.security.cert.CertificateNotYetValidException;
 import java.security.cert.CertificateRevokedException;
-import javax.inject.Inject;
 import javax.xml.crypto.MarshalException;
 import javax.xml.crypto.dsig.XMLSignatureException;
 import javax.xml.parsers.ParserConfigurationException;
@@ -63,8 +63,7 @@ public final class DomainFlowTmchUtils {
     if (!(signedMarks.get(0) instanceof EncodedSignedMark)) {
       throw new SignedMarksMustBeEncodedException();
     }
-    SignedMark signedMark =
-        verifyEncodedSignedMark((EncodedSignedMark) signedMarks.get(0), now);
+    SignedMark signedMark = verifyEncodedSignedMark((EncodedSignedMark) signedMarks.get(0), now);
     return verifySignedMarkValidForDomainLabel(signedMark, domainLabel);
   }
 
@@ -156,7 +155,8 @@ public final class DomainFlowTmchUtils {
   }
 
   /** The provided mark does not match the desired domain label. */
-  static class NoMarksFoundMatchingDomainException extends RequiredParameterMissingException {
+  public static class NoMarksFoundMatchingDomainException
+      extends RequiredParameterMissingException {
     public NoMarksFoundMatchingDomainException() {
       super("The provided mark does not match the desired domain label");
     }

@@ -1,4 +1,4 @@
-// Copyright 2023 The Nomulus Authors. All Rights Reserved.
+// Copyright 2024 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,7 +17,16 @@ import { Component, ViewEncapsulation } from '@angular/core';
 @Component({
   selector: 'app-settings',
   templateUrl: './settings.component.html',
-  styleUrls: ['./settings.component.less'],
+  styleUrls: ['./settings.component.scss'],
   encapsulation: ViewEncapsulation.None,
+  standalone: false,
 })
-export class SettingsComponent {}
+export class SettingsComponent {
+  public static PATH = 'settings';
+
+  public static matchesUrl(url: string): boolean {
+    return url[0] === '/'
+      ? url.startsWith(`/${this.PATH}`)
+      : url.startsWith(this.PATH);
+  }
+}

@@ -37,13 +37,12 @@ import google.registry.networking.module.CertificateSupplierModule;
 import google.registry.networking.module.CertificateSupplierModule.Mode;
 import google.registry.proxy.EppProtocolModule.EppProtocol;
 import google.registry.proxy.HealthCheckProtocolModule.HealthCheckProtocol;
+import google.registry.proxy.HttpsRelayProtocolModule.HttpsRelayProtocol;
 import google.registry.proxy.Protocol.FrontendProtocol;
 import google.registry.proxy.ProxyConfig.Environment;
-import google.registry.proxy.WebWhoisProtocolsModule.HttpWhoisProtocol;
-import google.registry.proxy.WebWhoisProtocolsModule.HttpsWhoisProtocol;
-import google.registry.proxy.WhoisProtocolModule.WhoisProtocol;
 import google.registry.proxy.handler.ProxyProtocolHandler;
 import google.registry.util.Clock;
+import google.registry.util.GcpJsonFormatter;
 import google.registry.util.GoogleCredentialsBundle;
 import google.registry.util.JdkLoggerConfig;
 import google.registry.util.OidcTokenUtils;
@@ -52,11 +51,14 @@ import io.netty.handler.logging.LogLevel;
 import io.netty.handler.logging.LoggingHandler;
 import io.netty.handler.ssl.OpenSsl;
 import io.netty.handler.ssl.SslProvider;
+import jakarta.inject.Named;
+import jakarta.inject.Singleton;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Optional;
+import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -66,8 +68,6 @@ import java.util.function.Supplier;
 import java.util.logging.ConsoleHandler;
 import java.util.logging.Handler;
 import java.util.logging.Level;
-import javax.inject.Named;
-import javax.inject.Singleton;
 
 /**
  * A module that provides the port-to-protocol map and other configs that are used to bootstrap the
@@ -76,20 +76,18 @@ import javax.inject.Singleton;
 @Module
 public class ProxyModule {
 
-  @Parameter(names = "--whois", description = "Port for WHOIS")
-  private Integer whoisPort;
-
   @Parameter(names = "--epp", description = "Port for EPP")
   private Integer eppPort;
 
   @Parameter(names = "--health_check", description = "Port for health check")
   private Integer healthCheckPort;
 
-  @Parameter(names = "--http_whois", description = "Port for HTTP WHOIS")
-  private Integer httpWhoisPort;
-
-  @Parameter(names = "--https_whois", description = "Port for HTTPS WHOIS")
-  private Integer httpsWhoisPort;
+  @Parameter(
+      names = "--local",
+      description =
+          "Whether EPP traffic should be forwarded to localhost using HTTP on port defined in"
+              + " httpsRelay.localPort")
+  private boolean local = false;
 
   @Parameter(names = "--env", description = "Environment to run the proxy in")
   private Environment env = Environment.LOCAL;
@@ -130,8 +128,7 @@ public class ProxyModule {
       // "io.netty.handler.logging.LoggingHandler" to actually process the logs. This JUL logger is
       // set to Level.FINE if the --log parameter is passed, so that it does not filter out logs
       // that the LoggingHandler writes. Otherwise, the logs are silently ignored because the
-      // default
-      // JUL logger level is Level.INFO.
+      // default JUL logger level is Level.INFO.
       JdkLoggerConfig.getConfig(LoggingHandler.class).setLevel(Level.FINE);
       // Log source IP information if --log parameter is passed. This is considered PII and should
       // only be used in non-production environment for debugging purpose.
@@ -169,9 +166,10 @@ public class ProxyModule {
   }
 
   @Provides
-  @WhoisProtocol
-  int provideWhoisPort(ProxyConfig config) {
-    return Optional.ofNullable(whoisPort).orElse(config.whois.port);
+  @HttpsRelayProtocol
+  @Singleton
+  boolean provideIsLocal() {
+    return local;
   }
 
   @Provides
@@ -187,24 +185,12 @@ public class ProxyModule {
   }
 
   @Provides
-  @HttpWhoisProtocol
-  int provideHttpWhoisProtocol(ProxyConfig config) {
-    return Optional.ofNullable(httpWhoisPort).orElse(config.webWhois.httpPort);
-  }
-
-  @Provides
-  @HttpsWhoisProtocol
-  int provideHttpsWhoisProtocol(ProxyConfig config) {
-    return Optional.ofNullable(httpsWhoisPort).orElse(config.webWhois.httpsPort);
-  }
-
-  @Provides
   Environment provideEnvironment() {
     return env;
   }
 
   /**
-   * Provides shared logging handler.
+   * Provides a shared logging handler.
    *
    * <p>Note that this handler always records logs at {@code LogLevel.DEBUG}, it is up to the JUL
    * logger that it contains to decide if logs at this level should actually be captured. The log
@@ -261,6 +247,13 @@ public class ProxyModule {
       GoogleCredentialsBundle credentialsBundle, @Named("oauthClientId") String clientId) {
     return Suppliers.memoizeWithExpiration(
         () -> OidcTokenUtils.createOidcToken(credentialsBundle, clientId), 1, TimeUnit.HOURS);
+  }
+
+  @Singleton
+  @Provides
+  @Named("canary")
+  boolean provideIsCanary(Environment env) {
+    return env.name().endsWith("_CANARY");
   }
 
   @Singleton
@@ -373,6 +366,26 @@ public class ProxyModule {
     return Duration.ofSeconds(config.serverCertificateCacheSeconds);
   }
 
+  @Singleton
+  @Provides
+  @Named("frontendMetricsRatio")
+  static double provideFrontendMetricsRatio(ProxyConfig config) {
+    return config.metrics.frontendMetricsRatio;
+  }
+
+  @Singleton
+  @Provides
+  @Named("backendMetricsRatio")
+  static double provideBackendMetricsRatio(ProxyConfig config) {
+    return config.metrics.backendMetricsRatio;
+  }
+
+  @Singleton
+  @Provides
+  static Random provideRandom() {
+    return new Random();
+  }
+
   /** Root level component that exposes the port-to-protocol map. */
   @Singleton
   @Component(
@@ -380,8 +393,6 @@ public class ProxyModule {
         ProxyModule.class,
         CertificateSupplierModule.class,
         HttpsRelayProtocolModule.class,
-        WhoisProtocolModule.class,
-        WebWhoisProtocolsModule.class,
         EppProtocolModule.class,
         HealthCheckProtocolModule.class,
         MetricsModule.class

@@ -25,13 +25,9 @@ import google.registry.model.console.UserRoles;
 import google.registry.persistence.transaction.JpaTestExtensions;
 import google.registry.persistence.transaction.JpaTransactionManagerExtension;
 import google.registry.request.auth.AuthResult;
-import google.registry.request.auth.AuthSettings.AuthLevel;
 import google.registry.request.auth.OidcTokenAuthenticationMechanism;
-import google.registry.request.auth.UserAuthInfo;
-import google.registry.testing.UserInfo;
-import google.registry.testing.UserServiceExtension;
+import google.registry.testing.DatabaseHelper;
 import google.registry.tools.params.HostAndPortParameter;
-import google.registry.ui.ConsoleDebug;
 import java.util.List;
 
 /** Command-line interface for {@link RegistryTestServer}. */
@@ -46,38 +42,29 @@ public final class RegistryTestServerMain {
   private static final String ORANGE = "\u001b[1;38;5;172m";
 
   @Parameter(
-      names = "--mode",
-      description = "UI console debug mode. RAW allows live editing; DEBUG allows rename testing.")
-  private ConsoleDebug mode = ConsoleDebug.PRODUCTION;
-
-  @Parameter(
       names = "--address",
       description = "Listening address.",
       validateWith = HostAndPortParameter.class)
-  private HostAndPort address = HostAndPort.fromString("[::]:8080");
+  private HostAndPort address = HostAndPort.fromString("[::1]:8080");
 
   @Parameter(names = "--fixtures", description = "Fixtures to load into the DB.")
   private List<Fixture> fixtures = ImmutableList.of(Fixture.BASIC);
 
   @Parameter(
       names = "--login_email",
-      description = "Login email address for App Engine Local User Service.")
+      description = "Login email address for the local user service.")
   private String loginEmail = "Marla.Singer@crr.com";
 
   @Parameter(
       names = "--login_is_admin",
-      description = "Should logged in user be an admin for App Engine Local User Service.",
+      description = "Should logged in user be an admin for the local user service?",
       arity = 1)
   private boolean loginIsAdmin = true;
 
-  @Parameter(
-      names = "--jetty_debug",
-      description = "Enables Jetty debug logging.")
+  @Parameter(names = "--jetty_debug", description = "Enables Jetty debug logging.")
   private boolean jettyDebug;
 
-  @Parameter(
-      names = "--jetty_verbose",
-      description = "Enables Jetty verbose logging.")
+  @Parameter(names = "--jetty_verbose", description = "Enables Jetty verbose logging.")
   private boolean jettyVerbose;
 
   @Parameter(
@@ -99,7 +86,6 @@ public final class RegistryTestServerMain {
   }
 
   private void run() throws Throwable {
-    ConsoleDebug.set(mode);
     if (jettyDebug) {
       System.setProperty("DEBUG", "true");
     }
@@ -107,56 +93,56 @@ public final class RegistryTestServerMain {
       System.setProperty("VERBOSE", "true");
     }
 
-    System.out.printf("\n"
-        + "        CHARLESTON ROAD REGISTRY SHARED REGISTRATION SYSTEM\n"
-        + "                      ICANN-GTLD-AGB-20120604\n\n%s"
-        + "        ▓█████▄  ▒█████   ███▄ ▄███▓ ▄▄▄       ██▓ ███▄    █\n"
-        + "        ▒██▀ ██▌▒██▒  ██▒▓██▒▀█▀ ██▒▒████▄    ▓██▒ ██ ▀█   █\n"
-        + "        ░██   █▌▒██░  ██▒▓██    ▓██░▒██  ▀█▄  ▒██▒▓██  ▀█ ██▒\n"
-        + "        ░▓█▄   ▌▒██   ██░▒██    ▒██ ░██▄▄▄▄██ ░██░▓██▒  ▐▌██▒\n"
-        + "        ░▒████▓ ░ ████▓▒░▒██▒   ░██▒ ▓█   ▓██▒░██░▒██░   ▓██░\n"
-        + "         ▒▒▓  ▒ ░ ▒░▒░▒░ ░ ▒░   ░  ░ ▒▒   ▓▒█░░▓  ░ ▒░   ▒ ▒\n"
-        + "         ░ ▒  ▒   ░ ▒ ▒░ ░  ░      ░  ▒   ▒▒ ░ ▒ ░░ ░░   ░ ▒░\n"
-        + "         ░ ░  ░ ░ ░ ░ ▒  ░      ░     ░   ▒    ▒ ░   ░   ░ ░\n"
-        + "           ░        ░ ░         ░         ░  ░ ░           ░\n"
-        + "         ░\n%s"
-        + "    ██▀███  ▓█████   ▄████  ██▓  ██████ ▄▄▄█████▓ ██▀███ ▓██   ██▓\n"
-        + "    ▓██ ▒ ██▒▓█   ▀  ██▒ ▀█▒▓██▒▒██    ▒ ▓  ██▒ ▓▒▓██ ▒ ██▒▒██  ██▒\n"
-        + "    ▓██ ░▄█ ▒▒███   ▒██░▄▄▄░▒██▒░ ▓██▄   ▒ ▓██░ ▒░▓██ ░▄█ ▒ ▒██ ██░\n"
-        + "    ▒██▀▀█▄  ▒▓█  ▄ ░▓█  ██▓░██░  ▒   ██▒░ ▓██▓ ░ ▒██▀▀█▄   ░ ▐██▓░\n"
-        + "    ░██▓ ▒██▒░▒████▒░▒▓███▀▒░██░▒██████▒▒  ▒██▒ ░ ░██▓ ▒██▒ ░ ██▒▓░\n"
-        + "    ░ ▒▓ ░▒▓░░░ ▒░ ░ ░▒   ▒ ░▓  ▒ ▒▓▒ ▒ ░  ▒ ░░   ░ ▒▓ ░▒▓░  ██▒▒▒\n"
-        + "    ░▒ ░ ▒░ ░ ░  ░  ░   ░  ▒ ░░ ░▒  ░ ░    ░      ░▒ ░ ▒░▓██ ░▒░\n"
-        + "    ░░   ░    ░   ░ ░   ░  ▒ ░░  ░  ░    ░        ░░   ░ ▒ ▒ ░░\n"
-        + "     ░        ░  ░      ░  ░        ░              ░     ░ ░\n"
-        + "                                                         ░ ░\n%s"
-        + "(✿◕ ‿◕ )ノ%s\n",
+    System.out.printf(
+"""
+
+        CHARLESTON ROAD REGISTRY SHARED REGISTRATION SYSTEM
+                      ICANN-GTLD-AGB-20120604
+
+%s        ▓█████▄  ▒█████   ███▄ ▄███▓ ▄▄▄       ██▓ ███▄    █
+        ▒██▀ ██▌▒██▒  ██▒▓██▒▀█▀ ██▒▒████▄    ▓██▒ ██ ▀█   █
+        ░██   █▌▒██░  ██▒▓██    ▓██░▒██  ▀█▄  ▒██▒▓██  ▀█ ██▒
+        ░▓█▄   ▌▒██   ██░▒██    ▒██ ░██▄▄▄▄██ ░██░▓██▒  ▐▌██▒
+        ░▒████▓ ░ ████▓▒░▒██▒   ░██▒ ▓█   ▓██▒░██░▒██░   ▓██░
+         ▒▒▓  ▒ ░ ▒░▒░▒░ ░ ▒░   ░  ░ ▒▒   ▓▒█░░▓  ░ ▒░   ▒ ▒
+         ░ ▒  ▒   ░ ▒ ▒░ ░  ░      ░  ▒   ▒▒ ░ ▒ ░░ ░░   ░ ▒░
+         ░ ░  ░ ░ ░ ░ ▒  ░      ░     ░   ▒    ▒ ░   ░   ░ ░
+           ░        ░ ░         ░         ░  ░ ░           ░
+         ░
+%s    ██▀███  ▓█████   ▄████  ██▓  ██████ ▄▄▄█████▓ ██▀███ ▓██   ██▓
+    ▓██ ▒ ██▒▓█   ▀  ██▒ ▀█▒▓██▒▒██    ▒ ▓  ██▒ ▓▒▓██ ▒ ██▒▒██  ██▒
+    ▓██ ░▄█ ▒▒███   ▒██░▄▄▄░▒██▒░ ▓██▄   ▒ ▓██░ ▒░▓██ ░▄█ ▒ ▒██ ██░
+    ▒██▀▀█▄  ▒▓█  ▄ ░▓█  ██▓░██░  ▒   ██▒░ ▓██▓ ░ ▒██▀▀█▄   ░ ▐██▓░
+    ░██▓ ▒██▒░▒████▒░▒▓███▀▒░██░▒██████▒▒  ▒██▒ ░ ░██▓ ▒██▒ ░ ██▒▓░
+    ░ ▒▓ ░▒▓░░░ ▒░ ░ ░▒   ▒ ░▓  ▒ ▒▓▒ ▒ ░  ▒ ░░   ░ ▒▓ ░▒▓░  ██▒▒▒
+    ░▒ ░ ▒░ ░ ░  ░  ░   ░  ▒ ░░ ░▒  ░ ░    ░      ░▒ ░ ▒░▓██ ░▒░
+    ░░   ░    ░   ░ ░   ░  ▒ ░░  ░  ░    ░        ░░   ░ ▒ ▒ ░░
+     ░        ░  ░      ░  ░        ░              ░     ░ ░
+                                                         ░ ░
+%s(✿◕ ‿◕ )ノ%s
+""",
         LIGHT_PURPLE, ORANGE, PINK, RESET);
 
     final RegistryTestServer server = new RegistryTestServer(address);
 
-    System.out.printf("%sLoading SQL fixtures and User service...%s\n", BLUE, RESET);
-    new UserServiceExtension(
-            loginIsAdmin ? UserInfo.createAdmin(loginEmail) : UserInfo.create(loginEmail))
-        .beforeEach(null);
+    System.out.printf("%sLoading SQL fixtures setting User for authentication...%s\n", BLUE, RESET);
+    new JpaTestExtensions.Builder().buildIntegrationTestExtension().beforeEach(null);
+    JpaTransactionManagerExtension.loadInitialData();
     UserRoles userRoles =
         new UserRoles.Builder().setIsAdmin(loginIsAdmin).setGlobalRole(GlobalRole.FTE).build();
     User user =
-        new User.Builder()
-            .setEmailAddress(loginEmail)
-            .setGaiaId("123457890")
-            .setUserRoles(userRoles)
-            .setRegistryLockPassword("registryLockPassword")
-            .build();
-    OidcTokenAuthenticationMechanism.setAuthResultForTesting(
-        AuthResult.create(AuthLevel.USER, UserAuthInfo.create(user)));
-    new JpaTestExtensions.Builder().buildIntegrationTestExtension().beforeEach(null);
-    JpaTransactionManagerExtension.loadInitialData();
+        DatabaseHelper.persistResource(
+            new User.Builder()
+                .setEmailAddress(loginEmail)
+                .setUserRoles(userRoles)
+                .setRegistryLockPassword("registryLockPassword")
+                .build());
+    OidcTokenAuthenticationMechanism.setAuthResultForTesting(AuthResult.createUser(user));
     System.out.printf("%sLoading fixtures...%s\n", BLUE, RESET);
     for (Fixture fixture : fixtures) {
       fixture.load();
     }
-    System.out.printf("%sStarting Jetty6 HTTP Server...%s\n", BLUE, RESET);
+    System.out.printf("%sStarting Jetty HTTP Server...%s\n", BLUE, RESET);
     server.start();
     System.out.printf("%sListening on: %s%s\n", PURPLE, server.getUrl("/"), RESET);
     try {
@@ -167,7 +153,6 @@ public final class RegistryTestServerMain {
       }
     } finally {
       server.stop();
-      // appEngine.tearDown();
     }
   }
 

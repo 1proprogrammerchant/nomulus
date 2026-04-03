@@ -52,11 +52,6 @@ class LoadTestCommand extends ConfirmingCommand implements CommandWithConnection
   int successfulDomainCreates = 1;
 
   @Parameter(
-      names = {"--successful_contact_creates"},
-      description = "Number of contact records to create per second.")
-  int successfulContactCreates = 1;
-
-  @Parameter(
       names = {"--host_infos"},
       description = "Number of successful host:info commands to send per second.")
   int hostInfos = 1;
@@ -65,11 +60,6 @@ class LoadTestCommand extends ConfirmingCommand implements CommandWithConnection
       names = {"--domain_infos"},
       description = "Number of successful domain:info commands to send per second.")
   int domainInfos = 1;
-
-  @Parameter(
-      names = {"--contact_infos"},
-      description = "Number of successful contact:info commands to send per second.")
-  int contactInfos = 1;
 
   @Parameter(
       names = {"--run_seconds"},
@@ -86,17 +76,17 @@ class LoadTestCommand extends ConfirmingCommand implements CommandWithConnection
   @Override
   protected boolean checkExecutionState() {
     if (RegistryToolEnvironment.get() == RegistryToolEnvironment.PRODUCTION) {
-      System.err.println("You may not run a load test against production.");
+      errorPrintStream.println("You may not run a load test against production.");
       return false;
     }
 
     // Check validity of TLD and Client Id.
     if (!Tlds.getTlds().contains(tld)) {
-      System.err.printf("No such TLD: %s\n", tld);
+      errorPrintStream.printf("No such TLD: %s\n", tld);
       return false;
     }
-    if (!Registrar.loadByRegistrarId(clientId).isPresent()) {
-      System.err.printf("No such client: %s\n", clientId);
+    if (Registrar.loadByRegistrarId(clientId).isEmpty()) {
+      errorPrintStream.printf("No such client: %s\n", clientId);
       return false;
     }
 
@@ -112,17 +102,15 @@ class LoadTestCommand extends ConfirmingCommand implements CommandWithConnection
 
   @Override
   protected String execute() throws Exception {
-    System.err.println("Initiating load test...");
+    errorPrintStream.println("Initiating load test...");
 
     ImmutableMap<String, Object> params = new ImmutableMap.Builder<String, Object>()
         .put("tld", tld)
         .put("clientId", clientId)
         .put("successfulHostCreates", successfulHostCreates)
         .put("successfulDomainCreates", successfulDomainCreates)
-        .put("successfulContactCreates", successfulContactCreates)
         .put("hostInfos", hostInfos)
         .put("domainInfos", domainInfos)
-        .put("contactInfos", contactInfos)
         .put("runSeconds", runSeconds)
         .build();
 

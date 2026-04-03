@@ -17,10 +17,7 @@ package google.registry.tools;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Sets.difference;
-import static google.registry.model.EppResourceUtils.checkResourcesExist;
-import static google.registry.model.EppResourceUtils.loadByForeignKey;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
-import static google.registry.util.PreconditionsUtils.checkArgumentPresent;
 
 import com.beust.jcommander.Parameter;
 import com.beust.jcommander.Parameters;
@@ -31,6 +28,8 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedSet;
 import com.google.template.soy.data.SoyListData;
 import com.google.template.soy.data.SoyMapData;
+import google.registry.flows.ResourceFlowUtils;
+import google.registry.model.ForeignKeyUtils;
 import google.registry.model.domain.Domain;
 import google.registry.model.domain.secdns.DomainDsData;
 import google.registry.model.eppcommon.StatusValue;
@@ -39,13 +38,12 @@ import google.registry.tools.params.NameserversParameter;
 import google.registry.tools.soy.DomainRenewSoyInfo;
 import google.registry.tools.soy.UniformRapidSuspensionSoyInfo;
 import google.registry.util.Clock;
+import jakarta.inject.Inject;
+import jakarta.xml.bind.annotation.adapters.HexBinaryAdapter;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Optional;
 import java.util.Set;
-import javax.inject.Inject;
-import javax.xml.bind.annotation.adapters.HexBinaryAdapter;
 import org.joda.time.DateTime;
 import org.joda.time.format.DateTimeFormat;
 
@@ -73,7 +71,7 @@ final class UniformRapidSuspensionCommand extends MutatingEppToolCommand {
       description =
           "Comma-delimited set of fully qualified host names to replace the current hosts"
               + " on the domain.",
-      converter = NameserversParameter.class,
+      listConverter = NameserversParameter.class,
       validateWith = NameserversParameter.class)
   private Set<String> newHosts = new HashSet<>();
 
@@ -127,13 +125,13 @@ final class UniformRapidSuspensionCommand extends MutatingEppToolCommand {
   @Inject Clock clock;
 
   @Override
-  protected void initMutatingEppToolCommand() {
+  protected void initMutatingEppToolCommand()
+      throws ResourceFlowUtils.ResourceDoesNotExistException {
     superuser = true;
     DateTime now = clock.nowUtc();
-    Optional<Domain> domainOpt = loadByForeignKey(Domain.class, domainName, now);
-    checkArgumentPresent(domainOpt, "Domain '%s' does not exist or is deleted", domainName);
-    Domain domain = domainOpt.get();
-    Set<String> missingHosts = difference(newHosts, checkResourcesExist(Host.class, newHosts, now));
+    Domain domain = ResourceFlowUtils.loadAndVerifyExistence(Domain.class, domainName, now);
+    Set<String> missingHosts =
+        difference(newHosts, ForeignKeyUtils.loadKeys(Host.class, newHosts, now).keySet());
     checkArgument(missingHosts.isEmpty(), "Hosts do not exist: %s", missingHosts);
     checkArgument(
         locksToPreserve.isEmpty() || undo,
@@ -165,7 +163,7 @@ final class UniformRapidSuspensionCommand extends MutatingEppToolCommand {
               domain.getDomainName(),
               "expirationDate",
               domain
-                  .getRegistrationExpirationTime()
+                  .getRegistrationExpirationDateTime()
                   .toString(DateTimeFormat.forPattern("YYYY-MM-dd")),
               // period is the number of years to renew the registration for
               "period",
@@ -251,11 +249,12 @@ final class UniformRapidSuspensionCommand extends MutatingEppToolCommand {
     if (undo) {
       return "";
     }
-    StringBuilder undoBuilder = new StringBuilder("UNDO COMMAND:\n\n)")
-        .append("nomulus -e ")
-        .append(RegistryToolEnvironment.get())
-        .append(" uniform_rapid_suspension --undo --domain_name ")
-        .append(domainName);
+    StringBuilder undoBuilder =
+        new StringBuilder("UNDO COMMAND:\n\n")
+            .append("nomulus -e ")
+            .append(RegistryToolEnvironment.get())
+            .append(" uniform_rapid_suspension --undo --domain_name ")
+            .append(domainName);
     if (!existingNameservers.isEmpty()) {
       undoBuilder.append(" --hosts ").append(Joiner.on(',').join(existingNameservers));
     }

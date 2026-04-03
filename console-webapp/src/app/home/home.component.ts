@@ -1,4 +1,4 @@
-// Copyright 2022 The Nomulus Authors. All Rights Reserved.
+// Copyright 2024 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,219 +13,42 @@
 // limitations under the License.
 
 import { Component } from '@angular/core';
-
-export interface ActivityRecord {
-  eventType: string;
-  userName: string;
-  registrarName: string;
-  timestamp: string;
-  details: string;
-}
-
-const MOCK_DATA: ActivityRecord[] = [
-  {
-    eventType: 'Export DUMS',
-    userName: 'user3',
-    registrarName: 'registrar1',
-    timestamp: '2022-03-15T19:46:39.007',
-    details: 'All Domains under management exported as .csv file',
-  },
-  {
-    eventType: 'Update Contact',
-    userName: 'user3',
-    registrarName: 'registrar1',
-    timestamp: '2022-03-15T19:46:39.007',
-    details: 'All Domains under management exported as .csv file',
-  },
-  {
-    eventType: 'Delete Domain',
-    userName: 'user3',
-    registrarName: 'registrar1',
-    timestamp: '2022-03-15T19:46:39.007',
-    details: 'All Domains under management exported as .csv file',
-  },
-  {
-    eventType: 'Export DUMS',
-    userName: 'user3',
-    registrarName: 'registrar1',
-    timestamp: '2022-03-15T19:46:39.007',
-    details: 'All Domains under management exported as .csv file',
-  },
-  {
-    eventType: 'Update Contact',
-    userName: 'user3',
-    registrarName: 'registrar1',
-    timestamp: '2022-03-15T19:46:39.007',
-    details: 'All Domains under management exported as .csv file',
-  },
-  {
-    eventType: 'Delete Domain',
-    userName: 'user3',
-    registrarName: 'registrar1',
-    timestamp: '2022-03-15T19:46:39.007',
-    details: 'All Domains under management exported as .csv file',
-  },
-  {
-    eventType: 'Export DUMS',
-    userName: 'user3',
-    registrarName: 'registrar1',
-    timestamp: '2022-03-15T19:46:39.007',
-    details: 'All Domains under management exported as .csv file',
-  },
-  {
-    eventType: 'Update Contact',
-    userName: 'user3',
-    registrarName: 'registrar1',
-    timestamp: '2022-03-15T19:46:39.007',
-    details: 'All Domains under management exported as .csv file',
-  },
-  {
-    eventType: 'Delete Domain',
-    userName: 'user3',
-    registrarName: 'registrar1',
-    timestamp: '2022-03-15T19:46:39.007',
-    details: 'All Domains under management exported as .csv file',
-  },
-  {
-    eventType: 'Export DUMS',
-    userName: 'user3',
-    registrarName: 'registrar1',
-    timestamp: '2022-03-15T19:46:39.007',
-    details: 'All Domains under management exported as .csv file',
-  },
-  {
-    eventType: 'Update Contact',
-    userName: 'user3',
-    registrarName: 'registrar1',
-    timestamp: '2022-03-15T19:46:39.007',
-    details: 'All Domains under management exported as .csv file',
-  },
-  {
-    eventType: 'Delete Domain',
-    userName: 'user3',
-    registrarName: 'registrar1',
-    timestamp: '2022-03-15T19:46:39.007',
-    details: 'All Domains under management exported as .csv file',
-  },
-  {
-    eventType: 'Export DUMS',
-    userName: 'user3',
-    registrarName: 'registrar1',
-    timestamp: '2022-03-15T19:46:39.007',
-    details: 'All Domains under management exported as .csv file',
-  },
-  {
-    eventType: 'Update Contact',
-    userName: 'user3',
-    registrarName: 'registrar1',
-    timestamp: '2022-03-15T19:46:39.007',
-    details: 'All Domains under management exported as .csv file',
-  },
-  {
-    eventType: 'Delete Domain',
-    userName: 'user3',
-    registrarName: 'registrar1',
-    timestamp: '2022-03-15T19:46:39.007',
-    details: 'All Domains under management exported as .csv file',
-  },
-  {
-    eventType: 'Export DUMS',
-    userName: 'user3',
-    registrarName: 'registrar1',
-    timestamp: '2022-03-15T19:46:39.007',
-    details: 'All Domains under management exported as .csv file',
-  },
-  {
-    eventType: 'Update Contact',
-    userName: 'user3',
-    registrarName: 'registrar1',
-    timestamp: '2022-03-15T19:46:39.007',
-    details: 'All Domains under management exported as .csv file',
-  },
-  {
-    eventType: 'Delete Domain',
-    userName: 'user3',
-    registrarName: 'registrar1',
-    timestamp: '2022-03-15T19:46:39.007',
-    details: 'All Domains under management exported as .csv file',
-  },
-  {
-    eventType: 'Export DUMS',
-    userName: 'user3',
-    registrarName: 'registrar1',
-    timestamp: '2022-03-15T19:46:39.007',
-    details: 'All Domains under management exported as .csv file',
-  },
-  {
-    eventType: 'Update Contact',
-    userName: 'user3',
-    registrarName: 'registrar1',
-    timestamp: '2022-03-15T19:46:39.007',
-    details: 'All Domains under management exported as .csv file',
-  },
-  {
-    eventType: 'Delete Domain',
-    userName: 'user3',
-    registrarName: 'registrar1',
-    timestamp: '2022-03-15T19:46:39.007',
-    details: 'All Domains under management exported as .csv file',
-  },
-  {
-    eventType: 'Export DUMS',
-    userName: 'user3',
-    registrarName: 'registrar1',
-    timestamp: '2022-03-15T19:46:39.007',
-    details: 'All Domains under management exported as .csv file',
-  },
-  {
-    eventType: 'Update Contact',
-    userName: 'user3',
-    registrarName: 'registrar1',
-    timestamp: '2022-03-15T19:46:39.007',
-    details: 'All Domains under management exported as .csv file',
-  },
-  {
-    eventType: 'Delete Domain',
-    userName: 'user3',
-    registrarName: 'registrar1',
-    timestamp: '2022-03-15T19:46:39.007',
-    details: 'All Domains under management exported as .csv file',
-  },
-];
+import { Router } from '@angular/router';
+import { DomainListComponent } from '../domains/domainList.component';
+import { RegistrarComponent } from '../registrar/registrarsTable.component';
+import SecurityComponent from '../settings/security/security.component';
+import { SettingsComponent } from '../settings/settings.component';
+import { RESTRICTED_ELEMENTS } from '../shared/directives/userLevelVisiblity.directive';
+import { BreakPointObserverService } from '../shared/services/breakPoint.service';
 
 @Component({
   selector: 'app-home',
   templateUrl: './home.component.html',
-  styleUrls: ['./home.component.less'],
+  styleUrls: ['./home.component.scss'],
+  standalone: false,
 })
 export class HomeComponent {
-  columns = [
-    {
-      columnDef: 'eventType',
-      header: 'Event Type',
-      cell: (record: ActivityRecord) => `${record.eventType}`,
-    },
-    {
-      columnDef: 'userName',
-      header: 'User',
-      cell: (record: ActivityRecord) => `${record.userName}`,
-    },
-    {
-      columnDef: 'registrarName',
-      header: 'Registrar',
-      cell: (record: ActivityRecord) => `${record.registrarName}`,
-    },
-    {
-      columnDef: 'timestamp',
-      header: 'Timestamp',
-      cell: (record: ActivityRecord) => `${record.timestamp}`,
-    },
-    {
-      columnDef: 'details',
-      header: 'Details',
-      cell: (record: ActivityRecord) => `${record.details}`,
-    },
-  ];
-  dataSource = MOCK_DATA;
-  displayedColumns = this.columns.map((c) => c.columnDef);
+  constructor(
+    protected breakPointObserverService: BreakPointObserverService,
+    private router: Router
+  ) {}
+  getElementIdForRegistrarsBlock() {
+    return RESTRICTED_ELEMENTS.REGISTRAR_ELEMENT;
+  }
+  viewRegistrars() {
+    this.router.navigate([RegistrarComponent.PATH], {
+      queryParamsHandling: 'merge',
+    });
+  }
+  updateEppPassword() {
+    this.router.navigate(
+      [SettingsComponent.PATH + '/' + SecurityComponent.PATH],
+      { queryParamsHandling: 'merge' }
+    );
+  }
+  viewDums() {
+    this.router.navigate([DomainListComponent.PATH], {
+      queryParamsHandling: 'merge',
+    });
+  }
 }

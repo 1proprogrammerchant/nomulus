@@ -16,10 +16,10 @@ package google.registry.batch;
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
 import static google.registry.testing.DatabaseHelper.createTld;
-import static google.registry.testing.DatabaseHelper.persistActiveContact;
 import static google.registry.testing.DatabaseHelper.persistEppResource;
 import static google.registry.testing.DatabaseHelper.persistResource;
 import static google.registry.testing.LogsSubject.assertAboutLogs;
+import static org.joda.money.CurrencyUnit.USD;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
@@ -27,9 +27,11 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.testing.TestLogHandler;
+import google.registry.groups.GmailClient;
 import google.registry.model.billing.BillingBase.RenewalPriceBehavior;
-import google.registry.model.contact.Contact;
+import google.registry.model.domain.fee.FeeQueryCommandExtensionItem.CommandName;
 import google.registry.model.domain.token.AllocationToken;
 import google.registry.model.domain.token.AllocationToken.TokenType;
 import google.registry.model.domain.token.BulkPricingPackage;
@@ -39,10 +41,8 @@ import google.registry.testing.DatabaseHelper;
 import google.registry.testing.FakeClock;
 import google.registry.ui.server.SendEmailUtils;
 import google.registry.util.EmailMessage;
-import google.registry.util.SendEmailService;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import javax.mail.internet.InternetAddress;
 import org.joda.money.CurrencyUnit;
 import org.joda.money.Money;
 import org.joda.time.DateTime;
@@ -51,7 +51,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.mockito.ArgumentCaptor;
-import org.testcontainers.shaded.com.google.common.collect.ImmutableSet;
 
 /** Unit tests for {@link CheckBulkComplianceAction}. */
 public class CheckBulkComplianceActionTest {
@@ -77,8 +76,7 @@ public class CheckBulkComplianceActionTest {
   private final TestLogHandler logHandler = new TestLogHandler();
   private final Logger loggerToIntercept =
       Logger.getLogger(CheckBulkComplianceAction.class.getCanonicalName());
-  private final SendEmailService emailService = mock(SendEmailService.class);
-  private Contact contact;
+  private final GmailClient gmailClient = mock(GmailClient.class);
   private BulkPricingPackage bulkPricingPackage;
   private SendEmailUtils sendEmailUtils;
   private ArgumentCaptor<EmailMessage> emailCaptor = ArgumentCaptor.forClass(EmailMessage.class);
@@ -88,10 +86,8 @@ public class CheckBulkComplianceActionTest {
     loggerToIntercept.addHandler(logHandler);
     sendEmailUtils =
         new SendEmailUtils(
-            new InternetAddress("outgoing@registry.example"),
-            "UnitTest Registry",
             ImmutableList.of("notification@test.example", "notification2@test.example"),
-            emailService);
+            gmailClient);
     createTld("tld");
     action =
         new CheckBulkComplianceAction(
@@ -113,7 +109,9 @@ public class CheckBulkComplianceActionTest {
                 .setAllowedTlds(ImmutableSet.of("foo"))
                 .setAllowedRegistrarIds(ImmutableSet.of("TheRegistrar"))
                 .setRenewalPriceBehavior(RenewalPriceBehavior.SPECIFIED)
-                .setDiscountFraction(1)
+                .setRenewalPrice(Money.of(CurrencyUnit.USD, 0))
+                .setAllowedEppActions(ImmutableSet.of(CommandName.CREATE))
+                .setDiscountFraction(1.0)
                 .build());
     bulkPricingPackage =
         new BulkPricingPackage.Builder()
@@ -124,8 +122,6 @@ public class CheckBulkComplianceActionTest {
             .setNextBillingDate(DateTime.parse("2012-11-12T05:00:00Z"))
             .setLastNotificationSent(DateTime.parse("2010-11-12T05:00:00Z"))
             .build();
-
-    contact = persistActiveContact("contact1234");
   }
 
   @AfterEach
@@ -137,13 +133,13 @@ public class CheckBulkComplianceActionTest {
   void testSuccess_noBulkPackageOverCreateLimit() {
     tm().transact(() -> tm().put(bulkPricingPackage));
     persistEppResource(
-        DatabaseHelper.newDomain("foo.tld", contact)
+        DatabaseHelper.newDomain("foo.tld")
             .asBuilder()
             .setCurrentBulkToken(token.createVKey())
             .build());
 
     action.run();
-    verifyNoInteractions(emailService);
+    verifyNoInteractions(gmailClient);
     assertAboutLogs()
         .that(logHandler)
         .hasLogAtLevelWithMessage(
@@ -155,12 +151,12 @@ public class CheckBulkComplianceActionTest {
     tm().transact(() -> tm().put(bulkPricingPackage));
     // Create limit is 1, creating 2 domains to go over the limit
     persistEppResource(
-        DatabaseHelper.newDomain("foo.tld", contact)
+        DatabaseHelper.newDomain("foo.tld")
             .asBuilder()
             .setCurrentBulkToken(token.createVKey())
             .build());
     persistEppResource(
-        DatabaseHelper.newDomain("buzz.tld", contact)
+        DatabaseHelper.newDomain("buzz.tld")
             .asBuilder()
             .setCurrentBulkToken(token.createVKey())
             .build());
@@ -176,7 +172,7 @@ public class CheckBulkComplianceActionTest {
             Level.INFO,
             "Bulk pricing package with bulk token abc123 has exceeded their max domain creation"
                 + " limit by 1 name(s).");
-    verify(emailService).sendEmail(emailCaptor.capture());
+    verify(gmailClient).sendEmail(emailCaptor.capture());
     EmailMessage emailMessage = emailCaptor.getValue();
     assertThat(emailMessage.subject()).isEqualTo(CREATE_LIMIT_EMAIL_SUBJECT);
     assertThat(emailMessage.body())
@@ -188,12 +184,12 @@ public class CheckBulkComplianceActionTest {
     tm().transact(() -> tm().put(bulkPricingPackage));
     // Create limit is 1, creating 2 domains to go over the limit
     persistEppResource(
-        DatabaseHelper.newDomain("foo.tld", contact)
+        DatabaseHelper.newDomain("foo.tld")
             .asBuilder()
             .setCurrentBulkToken(token.createVKey())
             .build());
     persistEppResource(
-        DatabaseHelper.newDomain("buzz.tld", contact)
+        DatabaseHelper.newDomain("buzz.tld")
             .asBuilder()
             .setCurrentBulkToken(token.createVKey())
             .build());
@@ -207,7 +203,9 @@ public class CheckBulkComplianceActionTest {
                 .setAllowedTlds(ImmutableSet.of("foo"))
                 .setAllowedRegistrarIds(ImmutableSet.of("TheRegistrar"))
                 .setRenewalPriceBehavior(RenewalPriceBehavior.SPECIFIED)
-                .setDiscountFraction(1)
+                .setRenewalPrice(Money.of(USD, 0))
+                .setAllowedEppActions(ImmutableSet.of(CommandName.CREATE))
+                .setDiscountFraction(1.0)
                 .build());
     BulkPricingPackage bulkPricingPackage2 =
         new BulkPricingPackage.Builder()
@@ -220,12 +218,12 @@ public class CheckBulkComplianceActionTest {
     tm().transact(() -> tm().put(bulkPricingPackage2));
 
     persistEppResource(
-        DatabaseHelper.newDomain("foo2.tld", contact)
+        DatabaseHelper.newDomain("foo2.tld")
             .asBuilder()
             .setCurrentBulkToken(token2.createVKey())
             .build());
     persistEppResource(
-        DatabaseHelper.newDomain("buzz2.tld", contact)
+        DatabaseHelper.newDomain("buzz2.tld")
             .asBuilder()
             .setCurrentBulkToken(token2.createVKey())
             .build());
@@ -248,7 +246,7 @@ public class CheckBulkComplianceActionTest {
             Level.INFO,
             "Bulk pricing package with bulk token token has exceeded their max domain creation"
                 + " limit by 1 name(s).");
-    verify(emailService, times(2)).sendEmail(any(EmailMessage.class));
+    verify(gmailClient, times(2)).sendEmail(any(EmailMessage.class));
   }
 
   @Test
@@ -263,7 +261,9 @@ public class CheckBulkComplianceActionTest {
                 .setAllowedTlds(ImmutableSet.of("foo"))
                 .setAllowedRegistrarIds(ImmutableSet.of("TheRegistrar"))
                 .setRenewalPriceBehavior(RenewalPriceBehavior.SPECIFIED)
-                .setDiscountFraction(1)
+                .setRenewalPrice(Money.of(USD, 0))
+                .setAllowedEppActions(ImmutableSet.of(CommandName.CREATE))
+                .setDiscountFraction(1.0)
                 .build());
     BulkPricingPackage packagePromotion2 =
         new BulkPricingPackage.Builder()
@@ -277,12 +277,12 @@ public class CheckBulkComplianceActionTest {
 
     // Create limit is 1, creating 2 domains to go over the limit
     persistEppResource(
-        DatabaseHelper.newDomain("foo.tld", contact)
+        DatabaseHelper.newDomain("foo.tld")
             .asBuilder()
             .setCurrentBulkToken(token2.createVKey())
             .build());
     persistEppResource(
-        DatabaseHelper.newDomain("buzz.tld", contact)
+        DatabaseHelper.newDomain("buzz.tld")
             .asBuilder()
             .setCurrentBulkToken(token2.createVKey())
             .build());
@@ -292,20 +292,20 @@ public class CheckBulkComplianceActionTest {
         .that(logHandler)
         .hasLogAtLevelWithMessage(
             Level.INFO, "Found no bulk pricing packages over their create limit.");
-    verifyNoInteractions(emailService);
+    verifyNoInteractions(gmailClient);
   }
 
   @Test
   void testSuccess_noBulkPricingPackageOverActiveDomainsLimit() {
     tm().transact(() -> tm().put(bulkPricingPackage));
     persistEppResource(
-        DatabaseHelper.newDomain("foo.tld", contact)
+        DatabaseHelper.newDomain("foo.tld")
             .asBuilder()
             .setCurrentBulkToken(token.createVKey())
             .build());
 
     action.run();
-    verifyNoInteractions(emailService);
+    verifyNoInteractions(gmailClient);
     assertAboutLogs()
         .that(logHandler)
         .hasLogAtLevelWithMessage(
@@ -318,12 +318,12 @@ public class CheckBulkComplianceActionTest {
     tm().transact(() -> tm().put(bulkPricingPackage));
     // Domains limit is 1, creating 2 domains to go over the limit
     persistEppResource(
-        DatabaseHelper.newDomain("foo.tld", contact)
+        DatabaseHelper.newDomain("foo.tld")
             .asBuilder()
             .setCurrentBulkToken(token.createVKey())
             .build());
     persistEppResource(
-        DatabaseHelper.newDomain("buzz.tld", contact)
+        DatabaseHelper.newDomain("buzz.tld")
             .asBuilder()
             .setCurrentBulkToken(token.createVKey())
             .build());
@@ -337,7 +337,9 @@ public class CheckBulkComplianceActionTest {
                 .setAllowedTlds(ImmutableSet.of("foo"))
                 .setAllowedRegistrarIds(ImmutableSet.of("TheRegistrar"))
                 .setRenewalPriceBehavior(RenewalPriceBehavior.SPECIFIED)
-                .setDiscountFraction(1)
+                .setRenewalPrice(Money.of(USD, 0))
+                .setAllowedEppActions(ImmutableSet.of(CommandName.CREATE))
+                .setDiscountFraction(1.0)
                 .build());
     BulkPricingPackage bulkPricingPackage2 =
         new BulkPricingPackage.Builder()
@@ -349,7 +351,7 @@ public class CheckBulkComplianceActionTest {
             .build();
     tm().transact(() -> tm().put(bulkPricingPackage2));
     persistEppResource(
-        DatabaseHelper.newDomain("foo2.tld", contact)
+        DatabaseHelper.newDomain("foo2.tld")
             .asBuilder()
             .setCurrentBulkToken(token2.createVKey())
             .build());
@@ -365,7 +367,7 @@ public class CheckBulkComplianceActionTest {
             Level.INFO,
             "Bulk pricing package with bulk token abc123 has exceed their max active domains limit"
                 + " by 1 name(s).");
-    verify(emailService).sendEmail(emailCaptor.capture());
+    verify(gmailClient).sendEmail(emailCaptor.capture());
     EmailMessage emailMessage = emailCaptor.getValue();
     assertThat(emailMessage.subject()).isEqualTo(DOMAIN_LIMIT_WARNING_EMAIL_SUBJECT);
     assertThat(emailMessage.body())
@@ -383,12 +385,12 @@ public class CheckBulkComplianceActionTest {
                 tm().put(bulkPricingPackage.asBuilder().setMaxDomains(1).setMaxCreates(4).build()));
     // Domains limit is 1, creating 2 domains to go over the limit
     persistEppResource(
-        DatabaseHelper.newDomain("foo.tld", contact)
+        DatabaseHelper.newDomain("foo.tld")
             .asBuilder()
             .setCurrentBulkToken(token.createVKey())
             .build());
     persistEppResource(
-        DatabaseHelper.newDomain("buzz.tld", contact)
+        DatabaseHelper.newDomain("buzz.tld")
             .asBuilder()
             .setCurrentBulkToken(token.createVKey())
             .build());
@@ -402,7 +404,9 @@ public class CheckBulkComplianceActionTest {
                 .setAllowedTlds(ImmutableSet.of("foo"))
                 .setAllowedRegistrarIds(ImmutableSet.of("TheRegistrar"))
                 .setRenewalPriceBehavior(RenewalPriceBehavior.SPECIFIED)
-                .setDiscountFraction(1)
+                .setRenewalPrice(Money.of(USD, 0))
+                .setAllowedEppActions(ImmutableSet.of(CommandName.CREATE))
+                .setDiscountFraction(1.0)
                 .build());
     BulkPricingPackage bulkPricingPackage2 =
         new BulkPricingPackage.Builder()
@@ -415,12 +419,12 @@ public class CheckBulkComplianceActionTest {
     tm().transact(() -> tm().put(bulkPricingPackage2));
 
     persistEppResource(
-        DatabaseHelper.newDomain("foo2.tld", contact)
+        DatabaseHelper.newDomain("foo2.tld")
             .asBuilder()
             .setCurrentBulkToken(token2.createVKey())
             .build());
     persistEppResource(
-        DatabaseHelper.newDomain("buzz2.tld", contact)
+        DatabaseHelper.newDomain("buzz2.tld")
             .asBuilder()
             .setCurrentBulkToken(token2.createVKey())
             .build());
@@ -442,7 +446,7 @@ public class CheckBulkComplianceActionTest {
             Level.INFO,
             "Bulk pricing package with bulk token token has exceed their max active domains limit"
                 + " by 1 name(s).");
-    verify(emailService, times(2)).sendEmail(any(EmailMessage.class));
+    verify(gmailClient, times(2)).sendEmail(any(EmailMessage.class));
   }
 
   @Test
@@ -458,12 +462,12 @@ public class CheckBulkComplianceActionTest {
     tm().transact(() -> tm().put(bulkPricingPackage));
     // Domains limit is 1, creating 2 domains to go over the limit
     persistEppResource(
-        DatabaseHelper.newDomain("foo.tld", contact)
+        DatabaseHelper.newDomain("foo.tld")
             .asBuilder()
             .setCurrentBulkToken(token.createVKey())
             .build());
     persistEppResource(
-        DatabaseHelper.newDomain("buzz.tld", contact)
+        DatabaseHelper.newDomain("buzz.tld")
             .asBuilder()
             .setCurrentBulkToken(token.createVKey())
             .build());
@@ -479,7 +483,7 @@ public class CheckBulkComplianceActionTest {
             Level.INFO,
             "Bulk pricing package with bulk token abc123 has exceed their max active domains limit"
                 + " by 1 name(s).");
-    verifyNoInteractions(emailService);
+    verifyNoInteractions(gmailClient);
     BulkPricingPackage packageAfterCheck =
         tm().transact(() -> BulkPricingPackage.loadByTokenString(token.getToken()).get());
     assertThat(packageAfterCheck.getLastNotificationSent().get())
@@ -499,12 +503,12 @@ public class CheckBulkComplianceActionTest {
     tm().transact(() -> tm().put(bulkPricingPackage));
     // Domains limit is 1, creating 2 domains to go over the limit
     persistEppResource(
-        DatabaseHelper.newDomain("foo.tld", contact)
+        DatabaseHelper.newDomain("foo.tld")
             .asBuilder()
             .setCurrentBulkToken(token.createVKey())
             .build());
     persistEppResource(
-        DatabaseHelper.newDomain("buzz.tld", contact)
+        DatabaseHelper.newDomain("buzz.tld")
             .asBuilder()
             .setCurrentBulkToken(token.createVKey())
             .build());
@@ -520,7 +524,7 @@ public class CheckBulkComplianceActionTest {
             Level.INFO,
             "Bulk pricing package with bulk token abc123 has exceed their max active domains limit"
                 + " by 1 name(s).");
-    verify(emailService).sendEmail(emailCaptor.capture());
+    verify(gmailClient).sendEmail(emailCaptor.capture());
     EmailMessage emailMessage = emailCaptor.getValue();
     assertThat(emailMessage.subject()).isEqualTo(DOMAIN_LIMIT_WARNING_EMAIL_SUBJECT);
     assertThat(emailMessage.body())
@@ -544,12 +548,12 @@ public class CheckBulkComplianceActionTest {
     tm().transact(() -> tm().put(bulkPricingPackage));
     // Domains limit is 1, creating 2 domains to go over the limit
     persistEppResource(
-        DatabaseHelper.newDomain("foo.tld", contact)
+        DatabaseHelper.newDomain("foo.tld")
             .asBuilder()
             .setCurrentBulkToken(token.createVKey())
             .build());
     persistEppResource(
-        DatabaseHelper.newDomain("buzz.tld", contact)
+        DatabaseHelper.newDomain("buzz.tld")
             .asBuilder()
             .setCurrentBulkToken(token.createVKey())
             .build());
@@ -565,7 +569,7 @@ public class CheckBulkComplianceActionTest {
             Level.INFO,
             "Bulk pricing package with bulk token abc123 has exceed their max active domains limit"
                 + " by 1 name(s).");
-    verify(emailService).sendEmail(emailCaptor.capture());
+    verify(gmailClient).sendEmail(emailCaptor.capture());
     EmailMessage emailMessage = emailCaptor.getValue();
     assertThat(emailMessage.subject()).isEqualTo(DOMAIN_LIMIT_UPGRADE_EMAIL_SUBJECT);
     assertThat(emailMessage.body())

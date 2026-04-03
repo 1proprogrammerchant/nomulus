@@ -14,49 +14,69 @@
 
 package google.registry.flows.custom;
 
-import com.google.auto.value.AutoValue;
+import com.google.auto.value.AutoBuilder;
 import com.google.common.collect.ImmutableSet;
 import google.registry.model.ImmutableObject;
 import google.registry.persistence.VKey;
 
-/** A wrapper class that encapsulates database entities to both save and delete. */
-@AutoValue
-public abstract class EntityChanges {
+/** A record that encapsulates database entities to insert, update, and delete. */
+public record EntityChanges(
+    ImmutableSet<ImmutableObject> inserts,
+    ImmutableSet<ImmutableObject> updates,
+    ImmutableSet<VKey<ImmutableObject>> deletes) {
 
-  public abstract ImmutableSet<ImmutableObject> getSaves();
+  public ImmutableSet<ImmutableObject> getInserts() {
+    return inserts;
+  }
 
-  public abstract ImmutableSet<VKey<ImmutableObject>> getDeletes();
+  public ImmutableSet<ImmutableObject> getUpdates() {
+    return updates;
+  }
+
+  public ImmutableSet<VKey<ImmutableObject>> getDeletes() {
+    return deletes;
+  }
 
   public static Builder newBuilder() {
-    // Default both entities to save and entities to delete to empty sets, so that the build()
-    // method won't subsequently throw an exception if one doesn't end up being applicable.
-    return new AutoValue_EntityChanges.Builder()
-        .setSaves(ImmutableSet.of())
+    // Default inserts, updates, and deletes to empty sets, so that the build() method won't
+    // subsequently throw an exception if one doesn't end up being applicable.
+    return new AutoBuilder_EntityChanges_Builder()
+        .setInserts(ImmutableSet.of())
+        .setUpdates(ImmutableSet.of())
         .setDeletes(ImmutableSet.of());
   }
 
   /** Builder for {@link EntityChanges}. */
-  @AutoValue.Builder
-  public abstract static class Builder {
+  @AutoBuilder
+  public interface Builder {
 
-    public abstract Builder setSaves(ImmutableSet<ImmutableObject> entitiesToSave);
+    Builder setInserts(ImmutableSet<ImmutableObject> entitiesToInsert);
 
-    public abstract ImmutableSet.Builder<ImmutableObject> savesBuilder();
+    ImmutableSet.Builder<ImmutableObject> insertsBuilder();
 
-    public Builder addSave(ImmutableObject entityToSave) {
-      savesBuilder().add(entityToSave);
+    default Builder addInsert(ImmutableObject entityToInsert) {
+      insertsBuilder().add(entityToInsert);
       return this;
     }
 
-    public abstract Builder setDeletes(ImmutableSet<VKey<ImmutableObject>> entitiesToDelete);
+    Builder setUpdates(ImmutableSet<ImmutableObject> entitiesToUpdate);
 
-    public abstract ImmutableSet.Builder<VKey<ImmutableObject>> deletesBuilder();
+    ImmutableSet.Builder<ImmutableObject> updatesBuilder();
 
-    public Builder addDelete(VKey<ImmutableObject> entityToDelete) {
+    default Builder addUpdate(ImmutableObject entityToUpdate) {
+      updatesBuilder().add(entityToUpdate);
+      return this;
+    }
+
+    Builder setDeletes(ImmutableSet<VKey<ImmutableObject>> entitiesToDelete);
+
+    ImmutableSet.Builder<VKey<ImmutableObject>> deletesBuilder();
+
+    default Builder addDelete(VKey<ImmutableObject> entityToDelete) {
       deletesBuilder().add(entityToDelete);
       return this;
     }
 
-    public abstract EntityChanges build();
+    EntityChanges build();
   }
 }

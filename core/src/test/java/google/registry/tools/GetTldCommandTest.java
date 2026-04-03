@@ -16,11 +16,21 @@ package google.registry.tools;
 
 import static google.registry.testing.DatabaseHelper.createTld;
 import static google.registry.testing.DatabaseHelper.createTlds;
+import static google.registry.testing.DatabaseHelper.persistPremiumList;
+import static google.registry.testing.DatabaseHelper.persistResource;
 import static google.registry.testing.TestDataHelper.loadFile;
+import static google.registry.util.DateTimeUtils.START_OF_TIME;
+import static org.joda.money.CurrencyUnit.USD;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.beust.jcommander.ParameterException;
+import com.google.common.collect.ImmutableSortedMap;
 import google.registry.model.EntityYamlUtils;
+import google.registry.model.tld.Tld;
+import google.registry.model.tld.label.PremiumList;
+import org.joda.money.Money;
+import org.joda.time.DateTime;
+import org.joda.time.Duration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -34,8 +44,21 @@ class GetTldCommandTest extends CommandTestCase<GetTldCommand> {
 
   @Test
   void testSuccess() throws Exception {
-    createTld("xn--q9jyb4c");
-    runCommand("xn--q9jyb4c");
+    Tld tld = createTld("tld");
+    PremiumList premiumList = persistPremiumList("test", USD, "silver,USD 50", "gold,USD 80");
+    persistResource(
+        tld.asBuilder()
+            .setDnsAPlusAaaaTtl(Duration.standardMinutes(15))
+            .setDriveFolderId("driveFolder")
+            .setCreateBillingCostTransitions(
+                ImmutableSortedMap.of(
+                    START_OF_TIME,
+                    Money.of(USD, 8),
+                    DateTime.parse("2020-01-01T00:00:00Z"),
+                    Money.of(USD, 25)))
+            .setPremiumList(premiumList)
+            .build());
+    runCommand("tld");
     assertInStdout(loadFile(getClass(), "tld.yaml"));
   }
 

@@ -28,8 +28,8 @@ import google.registry.flows.FlowModule.RegistrarId;
 import google.registry.flows.annotations.ReportingSpec;
 import google.registry.model.eppcommon.Trid;
 import google.registry.model.eppinput.EppInput;
+import jakarta.inject.Inject;
 import java.util.Optional;
-import javax.inject.Inject;
 import org.json.simple.JSONValue;
 
 /** Reporter used by {@link FlowRunner} to record flow execution data for reporting. */
@@ -51,7 +51,7 @@ public class FlowReporter {
   @Inject Class<? extends Flow> flowClass;
   @Inject FlowReporter() {}
 
-  /** Records information about the current flow execution in the GAE request logs. */
+  /** Records information about the current flow execution in the request logs. */
   public void recordToLogs() {
     // Explicitly log flow metadata separately from the EPP XML itself so that it stays compact
     // enough to be sure to fit in a single log entry (the XML part in rare cases could be long
@@ -100,8 +100,7 @@ public class FlowReporter {
   public static ImmutableSet<String> extractTlds(Iterable<String> domainNames) {
     return Streams.stream(domainNames)
         .map(FlowReporter::extractTld)
-        .filter(Optional::isPresent)
-        .map(Optional::get)
+        .flatMap(Optional::stream)
         .collect(toImmutableSet());
   }
 

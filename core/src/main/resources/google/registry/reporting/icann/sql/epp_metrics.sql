@@ -15,7 +15,7 @@
 
   -- Query FlowReporter JSON log messages and calculate SRS metrics.
 
-  -- We use ugly regex's over the monthly appengine logs to determine how many
+  -- We use ugly regexes over the monthly GKE logs to determine how many
   -- EPP requests we received for each command. For example:
   -- {"commandType":"check"...,"targetIds":["ais.a.how"],
   -- "tld":"","tlds":["a.how"],"icannActivityReportField":"srs-dom-check"}
@@ -37,13 +37,13 @@ FROM (
   FROM (
     SELECT
       -- Extract the logged JSON payload.
-      REGEXP_EXTRACT(logMessage, r'FLOW-LOG-SIGNATURE-METADATA: (.*)\n?$')
+      REGEXP_EXTRACT(jsonPayload.message, r'FLOW-LOG-SIGNATURE-METADATA: (.*)\n?$')
       AS json
-    FROM `%PROJECT_ID%.%ICANN_REPORTING_DATA_SET%.%MONTHLY_LOGS_TABLE%` AS logs
-    JOIN
-      UNNEST(logs.logMessage) AS logMessage
+    FROM `%PROJECT_ID%.gke_logs.stderr_*`
     WHERE
-      STARTS_WITH(logMessage, "%METADATA_LOG_PREFIX%"))) AS regexes
+      STARTS_WITH(jsonPayload.message, "FLOW-LOG-SIGNATURE-METADATA")
+      AND _TABLE_SUFFIX BETWEEN '%FIRST_DAY_OF_MONTH%' AND '%LAST_DAY_OF_MONTH%')
+  ) AS regexes
 JOIN
   -- Unnest the JSON-parsed tlds.
   UNNEST(regexes.tlds) AS tld

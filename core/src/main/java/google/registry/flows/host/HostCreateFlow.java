@@ -22,7 +22,6 @@ import static google.registry.flows.host.HostFlowUtils.validateHostName;
 import static google.registry.flows.host.HostFlowUtils.verifySuperordinateDomainNotInPendingDelete;
 import static google.registry.flows.host.HostFlowUtils.verifySuperordinateDomainOwnership;
 import static google.registry.model.EppResourceUtils.createRepoId;
-import static google.registry.model.IdService.allocateId;
 import static google.registry.model.reporting.HistoryEntry.Type.HOST_CREATE;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
 import static google.registry.util.CollectionUtils.isNullOrEmpty;
@@ -35,7 +34,7 @@ import google.registry.flows.EppException.RequiredParameterMissingException;
 import google.registry.flows.ExtensionManager;
 import google.registry.flows.FlowModule.RegistrarId;
 import google.registry.flows.FlowModule.TargetId;
-import google.registry.flows.TransactionalFlow;
+import google.registry.flows.MutatingFlow;
 import google.registry.flows.annotations.ReportingSpec;
 import google.registry.flows.exceptions.ResourceAlreadyExistsForThisClientException;
 import google.registry.flows.exceptions.ResourceCreateContentionException;
@@ -49,8 +48,8 @@ import google.registry.model.host.Host;
 import google.registry.model.host.HostCommand.Create;
 import google.registry.model.host.HostHistory;
 import google.registry.model.reporting.IcannReportingTypes.ActivityReportField;
+import jakarta.inject.Inject;
 import java.util.Optional;
-import javax.inject.Inject;
 import org.joda.time.DateTime;
 
 /**
@@ -78,7 +77,7 @@ import org.joda.time.DateTime;
  * @error {@link UnexpectedExternalHostIpException}
  */
 @ReportingSpec(ActivityReportField.HOST_CREATE)
-public final class HostCreateFlow implements TransactionalFlow {
+public final class HostCreateFlow implements MutatingFlow {
 
   @Inject ResourceCommand resourceCommand;
   @Inject ExtensionManager extensionManager;
@@ -88,7 +87,7 @@ public final class HostCreateFlow implements TransactionalFlow {
   @Inject EppResponse.Builder responseBuilder;
 
   @Inject
-  @Config("contactAndHostRoidSuffix")
+  @Config("hostRoidSuffix")
   String roidSuffix;
 
   @Inject
@@ -117,17 +116,19 @@ public final class HostCreateFlow implements TransactionalFlow {
           ? new SubordinateHostMustHaveIpException()
           : new UnexpectedExternalHostIpException();
     }
+    HostFlowUtils.validateInetAddresses(command.getInetAddresses());
     Host newHost =
         new Host.Builder()
             .setCreationRegistrarId(registrarId)
             .setPersistedCurrentSponsorRegistrarId(registrarId)
             .setHostName(targetId)
             .setInetAddresses(command.getInetAddresses())
-            .setRepoId(createRepoId(allocateId(), roidSuffix))
+            .setRepoId(createRepoId(tm().allocateId(), roidSuffix))
             .setSuperordinateDomain(superordinateDomain.map(Domain::createVKey).orElse(null))
             .build();
     historyBuilder.setType(HOST_CREATE).setHost(newHost);
-    ImmutableSet<ImmutableObject> entitiesToSave = ImmutableSet.of(newHost, historyBuilder.build());
+    ImmutableSet<ImmutableObject> entitiesToInsert =
+        ImmutableSet.of(newHost, historyBuilder.build());
     if (superordinateDomain.isPresent()) {
       tm().update(
               superordinateDomain
@@ -139,7 +140,7 @@ public final class HostCreateFlow implements TransactionalFlow {
       // they are only written as NS records from the referencing domain.
       requestHostDnsRefresh(targetId);
     }
-    tm().insertAll(entitiesToSave);
+    tm().insertAll(entitiesToInsert);
     return responseBuilder.setResData(HostCreateData.create(targetId, now)).build();
   }
 

@@ -19,8 +19,8 @@ import com.beust.jcommander.Parameters;
 import com.google.api.client.extensions.java6.auth.oauth2.AuthorizationCodeInstalledApp;
 import com.google.api.client.extensions.jetty.auth.oauth2.LocalServerReceiver;
 import com.google.api.client.googleapis.auth.oauth2.GoogleAuthorizationCodeFlow;
+import jakarta.inject.Inject;
 import java.net.InetAddress;
-import javax.inject.Inject;
 
 /** Authorizes the nomulus tool for OAuth 2.0 access to remote resources. */
 @Parameters(commandDescription = "Create local OAuth credentials")
@@ -52,12 +52,22 @@ final class LoginCommand implements Command {
               url -> {
                 int remotePort = forwardingServerReceiver.getRemotePort();
                 System.out.printf(
-                    "Please first run the following command in a separate terminal on your local "
-                        + "host:\n\n  ssh -L %s:localhost:%s %s\n\n",
+                    """
+                    Please first run the following command in a separate terminal on your local\
+                     host:
+
+                      ssh -L %s:localhost:%s %s
+
+                    """,
                     port, remotePort, remoteHost);
                 System.out.printf(
-                    "Please then open the following URL in your local browser and follow the"
-                        + " instructions:\n\n  %s\n\n",
+                    """
+                    Please then open the following URL in your local browser and follow the\
+                     instructions:
+
+                      %s
+
+                    """,
                     url);
               });
     } else {

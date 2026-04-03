@@ -35,6 +35,8 @@ import static google.registry.flows.domain.DomainTransferUtils.createTransferSer
 import static google.registry.model.eppoutput.Result.Code.SUCCESS_WITH_ACTION_PENDING;
 import static google.registry.model.reporting.HistoryEntry.Type.DOMAIN_TRANSFER_REQUEST;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
+import static google.registry.util.DateTimeUtils.toDateTime;
+import static google.registry.util.DateTimeUtils.toInstant;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -45,7 +47,7 @@ import google.registry.flows.ExtensionManager;
 import google.registry.flows.FlowModule.RegistrarId;
 import google.registry.flows.FlowModule.Superuser;
 import google.registry.flows.FlowModule.TargetId;
-import google.registry.flows.TransactionalFlow;
+import google.registry.flows.MutatingFlow;
 import google.registry.flows.annotations.ReportingSpec;
 import google.registry.flows.domain.token.AllocationTokenFlowUtils;
 import google.registry.flows.exceptions.AlreadyPendingTransferException;
@@ -58,7 +60,6 @@ import google.registry.model.domain.Domain;
 import google.registry.model.domain.DomainCommand.Transfer;
 import google.registry.model.domain.DomainHistory;
 import google.registry.model.domain.Period;
-import google.registry.model.domain.fee.FeeQueryCommandExtensionItem.CommandName;
 import google.registry.model.domain.fee.FeeTransferCommandExtension;
 import google.registry.model.domain.fee.FeeTransformResponseExtension;
 import google.registry.model.domain.metadata.MetadataExtension;
@@ -77,11 +78,12 @@ import google.registry.model.reporting.HistoryEntry.HistoryEntryId;
 import google.registry.model.reporting.IcannReportingTypes.ActivityReportField;
 import google.registry.model.tld.Tld;
 import google.registry.model.transfer.DomainTransferData;
-import google.registry.model.transfer.TransferData.TransferServerApproveEntity;
+import google.registry.model.transfer.DomainTransferData.TransferServerApproveEntity;
 import google.registry.model.transfer.TransferResponse.DomainTransferResponse;
 import google.registry.model.transfer.TransferStatus;
+import jakarta.inject.Inject;
+import java.time.Instant;
 import java.util.Optional;
-import javax.inject.Inject;
 import org.joda.time.DateTime;
 
 /**
@@ -123,24 +125,20 @@ import org.joda.time.DateTime;
  * @error {@link DomainFlowUtils.UnsupportedFeeAttributeException}
  * @error {@link
  *     google.registry.flows.domain.token.AllocationTokenFlowUtils.AllocationTokenNotValidForDomainException}
- * @error {@link
- *     google.registry.flows.domain.token.AllocationTokenFlowUtils.InvalidAllocationTokenException}
+ * @error {@link AllocationTokenFlowUtils.NonexistentAllocationTokenException}
  * @error {@link
  *     google.registry.flows.domain.token.AllocationTokenFlowUtils.AllocationTokenNotInPromotionException}
  * @error {@link
  *     google.registry.flows.domain.token.AllocationTokenFlowUtils.AllocationTokenNotValidForRegistrarException}
  * @error {@link
- *     google.registry.flows.domain.token.AllocationTokenFlowUtils.AllocationTokenNotValidForTldException}
- * @error {@link
  *     google.registry.flows.domain.token.AllocationTokenFlowUtils.AlreadyRedeemedAllocationTokenException}
  */
 @ReportingSpec(ActivityReportField.DOMAIN_TRANSFER_REQUEST)
-public final class DomainTransferRequestFlow implements TransactionalFlow {
+public final class DomainTransferRequestFlow implements MutatingFlow {
 
-  private static final ImmutableSet<StatusValue> DISALLOWED_STATUSES = ImmutableSet.of(
-      StatusValue.CLIENT_TRANSFER_PROHIBITED,
-      StatusValue.PENDING_DELETE,
-      StatusValue.SERVER_TRANSFER_PROHIBITED);
+  private static final ImmutableSet<StatusValue> NON_SUPERUSER_DISALLOWED_STATUSES =
+      ImmutableSet.of(
+          StatusValue.CLIENT_TRANSFER_PROHIBITED, StatusValue.SERVER_TRANSFER_PROHIBITED);
 
   @Inject ResourceCommand resourceCommand;
   @Inject ExtensionManager extensionManager;
@@ -154,7 +152,6 @@ public final class DomainTransferRequestFlow implements TransactionalFlow {
   @Inject AsyncTaskEnqueuer asyncTaskEnqueuer;
   @Inject EppResponse.Builder responseBuilder;
   @Inject DomainPricingLogic pricingLogic;
-  @Inject AllocationTokenFlowUtils allocationTokenFlowUtils;
 
   @Inject DomainTransferRequestFlow() {}
 
@@ -170,12 +167,10 @@ public final class DomainTransferRequestFlow implements TransactionalFlow {
     extensionManager.validate();
     DateTime now = tm().getTransactionTime();
     Domain existingDomain = loadAndVerifyExistence(Domain.class, targetId, now);
-    allocationTokenFlowUtils.verifyAllocationTokenIfPresent(
-        existingDomain,
-        Tld.get(existingDomain.getTld()),
+    AllocationTokenFlowUtils.loadAllocationTokenFromExtension(
         gainingClientId,
+        targetId,
         now,
-        CommandName.TRANSFER,
         eppInput.getSingleExtension(AllocationTokenExtension.class));
     Optional<DomainTransferRequestSuperuserExtension> superuserExtension =
         eppInput.getSingleExtension(DomainTransferRequestSuperuserExtension.class);
@@ -201,7 +196,7 @@ public final class DomainTransferRequestFlow implements TransactionalFlow {
     Optional<FeesAndCredits> feesAndCredits;
     if (period.getValue() == 0) {
       feesAndCredits = Optional.empty();
-    } else if (!existingDomain.getCurrentBulkToken().isPresent()) {
+    } else if (existingDomain.getCurrentBulkToken().isEmpty()) {
       feesAndCredits =
           Optional.of(pricingLogic.getTransferPrice(tld, targetId, now, existingBillingRecurrence));
     } else {
@@ -238,7 +233,9 @@ public final class DomainTransferRequestFlow implements TransactionalFlow {
     Domain domainAtTransferTime = existingDomain.cloneProjectedAtTime(automaticTransferTime);
     // The new expiration time if there is a server approval.
     DateTime serverApproveNewExpirationTime =
-        computeExDateForApprovalTime(domainAtTransferTime, automaticTransferTime, period);
+        toDateTime(
+            computeExDateForApprovalTime(
+                domainAtTransferTime, toInstant(automaticTransferTime), period));
     // Create speculative entities in anticipation of an automatic server approval.
     ImmutableSet<TransferServerApproveEntity> serverApproveEntities =
         createTransferServerApproveEntities(
@@ -290,14 +287,12 @@ public final class DomainTransferRequestFlow implements TransactionalFlow {
 
     asyncTaskEnqueuer.enqueueAsyncResave(
         newDomain.createVKey(), now, ImmutableSortedSet.of(automaticTransferTime));
-    tm().putAll(
-            new ImmutableSet.Builder<>()
-                .add(newDomain, domainHistory, requestPollMessage)
-                .addAll(serverApproveEntities)
-                .build());
+    tm().put(newDomain);
+    tm().putAll(serverApproveEntities);
+    tm().insertAll(domainHistory, requestPollMessage);
     return responseBuilder
         .setResultFromCode(SUCCESS_WITH_ACTION_PENDING)
-        .setResData(createResponse(period, existingDomain, newDomain, now))
+        .setResData(createResponse(period, existingDomain, newDomain, toInstant(now)))
         .setExtensions(createResponseExtensions(feesAndCredits, feeTransfer))
         .build();
   }
@@ -308,8 +303,9 @@ public final class DomainTransferRequestFlow implements TransactionalFlow {
       DateTime now,
       Optional<DomainTransferRequestSuperuserExtension> superuserExtension)
       throws EppException {
-    verifyNoDisallowedStatuses(existingDomain, DISALLOWED_STATUSES);
+    verifyNoDisallowedStatuses(existingDomain, ImmutableSet.of(StatusValue.PENDING_DELETE));
     if (!isSuperuser) {
+      verifyNoDisallowedStatuses(existingDomain, NON_SUPERUSER_DISALLOWED_STATUSES);
       verifyAuthInfoPresentForResourceTransfer(authInfo);
       verifyAuthInfo(authInfo.get(), existingDomain);
     }
@@ -384,14 +380,14 @@ public final class DomainTransferRequestFlow implements TransactionalFlow {
   }
 
   private DomainTransferResponse createResponse(
-      Period period, Domain existingDomain, Domain newDomain, DateTime now) {
+      Period period, Domain existingDomain, Domain newDomain, Instant now) {
     // If the registration were approved this instant, this is what the new expiration would be,
     // because we cap at 10 years from the moment of approval. This is different from the server
     // approval new expiration time, which is capped at 10 years from the server approve time.
-    DateTime approveNowExtendedRegistrationTime =
+    Instant approveNowExtendedRegistrationTime =
         computeExDateForApprovalTime(existingDomain, now, period);
     return createTransferResponse(
-        targetId, newDomain.getTransferData(), approveNowExtendedRegistrationTime);
+        targetId, newDomain.getTransferData(), toDateTime(approveNowExtendedRegistrationTime));
   }
 
   private static ImmutableList<FeeTransformResponseExtension> createResponseExtensions(

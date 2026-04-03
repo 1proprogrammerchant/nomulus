@@ -62,13 +62,13 @@ import google.registry.util.NonFinalForTesting;
 import google.registry.util.Sleeper;
 import google.registry.util.SqlTemplate;
 import google.registry.util.SystemSleeper;
+import jakarta.inject.Inject;
 import java.io.IOException;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Random;
 import java.util.concurrent.ExecutorService;
 import javax.annotation.Nullable;
-import javax.inject.Inject;
 import org.joda.time.DateTime;
 import org.joda.time.Duration;
 
@@ -144,7 +144,8 @@ public class BigqueryConnection implements AutoCloseable {
     public Builder setPollInterval(Duration pollInterval) {
       checkArgument(
           !pollInterval.isShorterThan(MIN_POLL_INTERVAL),
-          "poll interval must be at least %ldms", MIN_POLL_INTERVAL.getMillis());
+          "poll interval must be at least %s ms",
+          MIN_POLL_INTERVAL.getMillis());
       instance.pollInterval = pollInterval;
       return this;
     }
@@ -216,7 +217,7 @@ public class BigqueryConnection implements AutoCloseable {
       }
 
       public Builder timeToLive(Duration duration) {
-        this.table.setExpirationTime(new DateTime(UTC).plus(duration).getMillis());
+        this.table.setExpirationTime(DateTime.now(UTC).plus(duration).getMillis());
         return this;
       }
 
@@ -277,20 +278,6 @@ public class BigqueryConnection implements AutoCloseable {
     /** Returns a new copy of the TableReference for the Table wrapped by this DestinationTable. */
     private TableReference getTableReference() {
       return table.getTableReference().clone();
-    }
-
-    /** Returns a string representation of the TableReference for the wrapped table. */
-    public String getStringReference() {
-      return tableReferenceToString(table.getTableReference());
-    }
-
-    /** Returns a string representation of the given TableReference. */
-    private static String tableReferenceToString(TableReference tableRef) {
-      return String.format(
-          "%s:%s.%s",
-          tableRef.getProjectId(),
-          tableRef.getDatasetId(),
-          tableRef.getTableId());
     }
   }
 
@@ -397,29 +384,12 @@ public class BigqueryConnection implements AutoCloseable {
   }
 
   /**
-   * Starts an asynchronous query job to dump the results of the specified query into a local
-   * ImmutableTable object, row-keyed by the row number (indexed from 1), column-keyed by the
-   * TableFieldSchema for that column, and with the value object as the cell value.  Note that null
-   * values will not actually be null, but they can be checked for using Data.isNull().
+   * Dumps the results of the specified query into a local ImmutableTable object, row-keyed by the
+   * row number (indexed from 1), column-keyed by the TableFieldSchema for that column, and with the
+   * value object as the cell value.
    *
-   * <p>Returns a ListenableFuture that holds the ImmutableTable on success.
-   */
-  public ListenableFuture<ImmutableTable<Integer, TableFieldSchema, Object>>
-      queryToLocalTable(String querySql) {
-    Job job = new Job()
-        .setConfiguration(new JobConfiguration()
-            .setQuery(new JobConfigurationQuery()
-                .setQuery(querySql)
-                .setDefaultDataset(getDataset())));
-    return transform(runJobToCompletion(job), this::getQueryResults, directExecutor());
-  }
-
-  /**
-   * Returns the result of calling queryToLocalTable, but synchronously to avoid spawning new
-   * background threads, which App Engine doesn't support.
-   *
-   * @see <a href="https://cloud.google.com/appengine/docs/standard/java/runtime#Threads">App Engine
-   *     Runtime</a>
+   * <p>Note that null values will not actually be null, but they can be checked for using
+   * Data.isNull()
    */
   public ImmutableTable<Integer, TableFieldSchema, Object> queryToLocalTableSync(String querySql) {
     Job job = new Job()
@@ -556,7 +526,6 @@ public class BigqueryConnection implements AutoCloseable {
   /**
    * Launch a job, but do not wait for it to complete.
    *
-   * @throws BigqueryJobFailureException
    */
   private Job launchJob(Job job, @Nullable AbstractInputStreamContent data) {
     verify(job.getStatus() == null);
@@ -572,7 +541,6 @@ public class BigqueryConnection implements AutoCloseable {
   /**
    * Synchronously waits for a job to complete that's already been launched.
    *
-   * @throws BigqueryJobFailureException
    */
   private Job waitForJob(Job job) {
     verify(job.getStatus() != null);
@@ -591,7 +559,6 @@ public class BigqueryConnection implements AutoCloseable {
   /**
    * Checks completed job for errors.
    *
-   * @throws BigqueryJobFailureException
    */
   private static Job checkJob(Job job) {
     verify(job.getStatus() != null);
@@ -636,10 +603,6 @@ public class BigqueryConnection implements AutoCloseable {
         });
   }
 
-  private ListenableFuture<Job> runJobToCompletion(final Job job) {
-    return service.submit(() -> runJob(job, null));
-  }
-
   /** Helper that returns true if a dataset with this name exists. */
   public boolean checkDatasetExists(String datasetName) throws IOException {
     try {
@@ -676,14 +639,6 @@ public class BigqueryConnection implements AutoCloseable {
     return new DatasetReference()
         .setProjectId(getProjectId())
         .setDatasetId(getDatasetId());
-  }
-
-  /** Returns table reference with the projectId and datasetId filled out for you. */
-  public TableReference getTable(String tableName) {
-    return new TableReference()
-        .setProjectId(getProjectId())
-        .setDatasetId(getDatasetId())
-        .setTableId(tableName);
   }
 
   /**

@@ -16,13 +16,14 @@ package google.registry.reporting.billing;
 
 import static com.google.common.base.Throwables.getRootCause;
 import static google.registry.request.Action.Method.POST;
-import static javax.servlet.http.HttpServletResponse.SC_INTERNAL_SERVER_ERROR;
-import static javax.servlet.http.HttpServletResponse.SC_OK;
+import static jakarta.servlet.http.HttpServletResponse.SC_INTERNAL_SERVER_ERROR;
+import static jakarta.servlet.http.HttpServletResponse.SC_OK;
+import static java.util.stream.Collectors.joining;
 
 import com.google.cloud.storage.BlobId;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableMultimap;
 import com.google.common.collect.Iterables;
 import com.google.common.flogger.FluentLogger;
 import com.google.common.io.ByteStreams;
@@ -36,18 +37,17 @@ import google.registry.request.Response;
 import google.registry.request.auth.Auth;
 import google.registry.storage.drive.DriveConnection;
 import google.registry.util.Retrier;
+import jakarta.inject.Inject;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Optional;
-import java.util.stream.Collectors;
-import javax.inject.Inject;
 
 /** Copy all registrar detail reports in a given bucket's subdirectory from GCS to Drive. */
 @Action(
     service = Action.Service.BACKEND,
     path = CopyDetailReportsAction.PATH,
     method = POST,
-    auth = Auth.AUTH_API_ADMIN)
+    auth = Auth.AUTH_ADMIN)
 public final class CopyDetailReportsAction implements Runnable {
 
   public static final String PATH = "/_dr/task/copyDetailReports";
@@ -97,14 +97,14 @@ public final class CopyDetailReportsAction implements Runnable {
       response.setPayload(String.format("Failure, encountered %s", e.getMessage()));
       return;
     }
-    ImmutableMap.Builder<String, Throwable> copyErrorsBuilder =
-        new ImmutableMap.Builder<String, Throwable>();
+    ImmutableMultimap.Builder<String, Throwable> copyErrorsBuilder =
+        new ImmutableMultimap.Builder<>();
     for (String detailReportName : detailReportObjectNames) {
       // The standard report format is "invoice_details_yyyy-MM_registrarId_tld.csv
       // TODO(larryruili): Determine a safer way of enforcing this.
       String registrarId = Iterables.get(Splitter.on('_').split(detailReportName), 3);
       Optional<Registrar> registrar = Registrar.loadByRegistrarId(registrarId);
-      if (!registrar.isPresent()) {
+      if (registrar.isEmpty()) {
         logger.atWarning().log(
             "Registrar %s not found in database for file '%s'.", registrar, detailReportName);
         continue;
@@ -145,17 +145,18 @@ public final class CopyDetailReportsAction implements Runnable {
     response.setStatus(SC_OK);
     response.setContentType(MediaType.PLAIN_TEXT_UTF_8);
     StringBuilder payload = new StringBuilder().append("Copied detail reports.\n");
-    ImmutableMap<String, Throwable> copyErrors = copyErrorsBuilder.build();
+    ImmutableMultimap<String, Throwable> copyErrors = copyErrorsBuilder.build();
     if (!copyErrors.isEmpty()) {
       payload.append("The following errors were encountered:\n");
-      payload.append(
-          copyErrors.entrySet().stream()
-              .map(
-                  entrySet ->
-                      String.format(
-                          "Registrar: %s\nError: %s\n",
-                          entrySet.getKey(), entrySet.getValue().getMessage()))
-              .collect(Collectors.joining()));
+      for (var registrarId : copyErrors.keySet()) {
+        payload.append(
+            String.format(
+                "Registrar: %s\nError: %s\n",
+                registrarId,
+                copyErrors.get(registrarId).stream()
+                    .map(Throwable::getMessage)
+                    .collect(joining("\n\t"))));
+      }
     }
     response.setPayload(payload.toString());
     emailUtils.sendAlertEmail(payload.toString());

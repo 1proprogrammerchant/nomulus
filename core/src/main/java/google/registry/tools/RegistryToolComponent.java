@@ -23,13 +23,9 @@ import google.registry.config.CloudTasksUtilsModule;
 import google.registry.config.CredentialModule.LocalCredentialJson;
 import google.registry.config.RegistryConfig.Config;
 import google.registry.config.RegistryConfig.ConfigModule;
-import google.registry.dns.writer.VoidDnsWriterModule;
-import google.registry.dns.writer.clouddns.CloudDnsWriterModule;
-import google.registry.dns.writer.dnsupdate.DnsUpdateWriterModule;
+import google.registry.dns.writer.DnsWritersModule;
 import google.registry.keyring.KeyringModule;
-import google.registry.keyring.api.DummyKeyringModule;
 import google.registry.keyring.api.KeyModule;
-import google.registry.keyring.secretmanager.SecretManagerKeyringModule;
 import google.registry.model.ModelModule;
 import google.registry.persistence.PersistenceModule;
 import google.registry.persistence.PersistenceModule.NomulusToolJpaTm;
@@ -39,13 +35,10 @@ import google.registry.privileges.secretmanager.SecretManagerModule;
 import google.registry.rde.RdeModule;
 import google.registry.request.Modules.GsonModule;
 import google.registry.request.Modules.UrlConnectionServiceModule;
-import google.registry.request.Modules.UrlFetchServiceModule;
-import google.registry.request.Modules.UserServiceModule;
 import google.registry.tools.AuthModule.LocalCredentialModule;
 import google.registry.util.UtilsModule;
-import google.registry.whois.NonCachingWhoisModule;
+import jakarta.inject.Singleton;
 import javax.annotation.Nullable;
-import javax.inject.Singleton;
 
 /**
  * Dagger component for Registry Tool.
@@ -56,15 +49,12 @@ import javax.inject.Singleton;
 @Singleton
 @Component(
     modules = {
-      AppEngineAdminApiModule.class,
       AuthModule.class,
       BatchModule.class,
       BigqueryModule.class,
       ConfigModule.class,
-      CloudDnsWriterModule.class,
       CloudTasksUtilsModule.class,
-      DummyKeyringModule.class,
-      DnsUpdateWriterModule.class,
+      DnsWritersModule.class,
       GsonModule.class,
       KeyModule.class,
       KeyringModule.class,
@@ -74,14 +64,9 @@ import javax.inject.Singleton;
       RdeModule.class,
       RegistryToolDataflowModule.class,
       RequestFactoryModule.class,
-      SecretManagerKeyringModule.class,
       SecretManagerModule.class,
       UrlConnectionServiceModule.class,
-      UrlFetchServiceModule.class,
-      UserServiceModule.class,
-      UtilsModule.class,
-      VoidDnsWriterModule.class,
-      NonCachingWhoisModule.class
+      UtilsModule.class
     })
 interface RegistryToolComponent {
   void inject(AckPollMessagesCommand command);
@@ -90,19 +75,23 @@ interface RegistryToolComponent {
 
   void inject(CheckDomainCommand command);
 
+  void inject(ConfigureTldCommand command);
+
   void inject(CountDomainsCommand command);
 
   void inject(CreateAnchorTenantCommand command);
 
   void inject(CreateCdnsTld command);
 
-  void inject(CreateContactCommand command);
-
   void inject(CreateDomainCommand command);
 
   void inject(CreateRegistrarCommand command);
 
-  void inject(CreateTldCommand command);
+  void inject(CreateUserCommand command);
+
+  void inject(CurlCommand command);
+
+  void inject(DeleteUserCommand command);
 
   void inject(EncryptEscrowDepositCommand command);
 
@@ -116,11 +105,12 @@ interface RegistryToolComponent {
 
   void inject(GetBulkPricingPackageCommand command);
 
-  void inject(GetContactCommand command);
-
   void inject(GetDomainCommand command);
 
+  void inject(GetFeatureFlagCommand command);
+
   void inject(GetHostCommand command);
+
   void inject(GetKeyringSecretCommand command);
 
   void inject(GetSqlCredentialCommand command);
@@ -131,6 +121,8 @@ interface RegistryToolComponent {
 
   void inject(ListCursorsCommand command);
 
+  void inject(ListFeatureFlagsCommand command);
+
   void inject(LockDomainCommand command);
 
   void inject(LoginCommand command);
@@ -138,6 +130,8 @@ interface RegistryToolComponent {
   void inject(LogoutCommand command);
 
   void inject(PendingEscrowCommand command);
+
+  void inject(RdapQueryCommand command);
 
   void inject(RenewDomainCommand command);
 
@@ -161,13 +155,9 @@ interface RegistryToolComponent {
 
   void inject(UpdateRegistrarCommand command);
 
-  void inject(UpdateTldCommand command);
-
   void inject(ValidateEscrowDepositCommand command);
 
   void inject(ValidateLoginCredentialsCommand command);
-
-  void inject(WhoisQueryCommand command);
 
   ServiceConnection serviceConnection();
 
@@ -187,6 +177,9 @@ interface RegistryToolComponent {
 
     @BindsInstance
     Builder sqlAccessInfoFile(@Nullable @Config("sqlAccessInfoFile") String sqlAccessInfoFile);
+
+    @BindsInstance
+    Builder useCanary(@Config("useCanary") boolean useCanary);
 
     RegistryToolComponent build();
   }

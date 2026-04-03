@@ -15,12 +15,12 @@
 package google.registry.rdap;
 
 import static google.registry.flows.host.HostFlowUtils.validateHostName;
-import static google.registry.model.EppResourceUtils.loadByForeignKeyCached;
 import static google.registry.request.Action.Method.GET;
 import static google.registry.request.Action.Method.HEAD;
 import static google.registry.util.DateTimeUtils.START_OF_TIME;
 
 import google.registry.flows.EppException;
+import google.registry.model.ForeignKeyUtils;
 import google.registry.model.host.Host;
 import google.registry.rdap.RdapJsonFormatter.OutputDataType;
 import google.registry.rdap.RdapMetrics.EndpointType;
@@ -29,10 +29,10 @@ import google.registry.request.Action;
 import google.registry.request.HttpException.BadRequestException;
 import google.registry.request.HttpException.NotFoundException;
 import google.registry.request.auth.Auth;
+import jakarta.inject.Inject;
 import java.util.Optional;
-import javax.inject.Inject;
 
-/** RDAP (new WHOIS) action for nameserver requests. */
+/** RDAP action for nameserver requests. */
 @Action(
     service = Action.Service.PUBAPI,
     path = "/rdap/nameserver/",
@@ -47,7 +47,7 @@ public class RdapNameserverAction extends RdapActionBase {
 
   @Override
   public RdapNameserver getJsonObjectForResource(String pathSearchString, boolean isHeadRequest) {
-    // RDAP Technical Implementation Guide 2.2.1 - we must support A-label (Punycode) and U-label
+    // RDAP Technical Implementation Guide 2.1.1 - we must support A-label (Punycode) and U-label
     // (Unicode) formats. canonicalizeName will transform Unicode to Punycode so we support both.
     pathSearchString = canonicalizeName(pathSearchString);
     // The RDAP syntax is /rdap/nameserver/ns1.mydomain.com.
@@ -62,11 +62,11 @@ public class RdapNameserverAction extends RdapActionBase {
     // If there are no undeleted nameservers with the given name, the foreign key should point to
     // the most recently deleted one.
     Optional<Host> host =
-        loadByForeignKeyCached(
+        ForeignKeyUtils.loadResourceByCache(
             Host.class,
             pathSearchString,
             shouldIncludeDeleted() ? START_OF_TIME : getRequestTime());
-    if (!host.isPresent() || !isAuthorized(host.get())) {
+    if (host.isEmpty() || !isAuthorized(host.get())) {
       // RFC7480 5.3 - if the server wishes to respond that it doesn't have data satisfying the
       // query, it MUST reply with 404 response code.
       //

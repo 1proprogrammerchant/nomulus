@@ -77,7 +77,7 @@ class HostDeleteFlowTest extends ResourceFlowTestCase<HostDeleteFlow, Host> {
   void testSuccess() throws Exception {
     persistActiveHost("ns1.example.tld");
     clock.advanceOneMilli();
-    assertTransactionalFlow(true);
+    assertMutatingFlow(true);
     runFlowAssertResponse(loadFile("host_delete_response.xml"));
     assertSqlDeleteSuccess();
   }
@@ -87,7 +87,7 @@ class HostDeleteFlowTest extends ResourceFlowTestCase<HostDeleteFlow, Host> {
     setEppInput("host_delete_no_cltrid.xml", ImmutableMap.of("HOSTNAME", "ns1.example.tld"));
     persistActiveHost("ns1.example.tld");
     clock.advanceOneMilli();
-    assertTransactionalFlow(true);
+    assertMutatingFlow(true);
     runFlowAssertResponse(loadFile("host_delete_response_no_cltrid.xml"));
     assertSqlDeleteSuccess();
   }
@@ -151,6 +151,43 @@ class HostDeleteFlowTest extends ResourceFlowTestCase<HostDeleteFlow, Host> {
     runFlowAssertResponse(
         CommitMode.LIVE, UserPrivileges.SUPERUSER, loadFile("host_delete_response.xml"));
     assertSqlDeleteSuccess();
+  }
+
+  @Test
+  void testSuccess_clientDeleteProhibited_superuser() throws Exception {
+    persistResource(
+        persistActiveHost("ns1.example.tld")
+            .asBuilder()
+            .addStatusValue(StatusValue.CLIENT_DELETE_PROHIBITED)
+            .build());
+    runFlowAssertResponse(
+        CommitMode.LIVE, UserPrivileges.SUPERUSER, loadFile("host_delete_response.xml"));
+  }
+
+  @Test
+  void testSuccess_serverDeleteProhibited_superuser() throws Exception {
+    persistResource(
+        persistActiveHost("ns1.example.tld")
+            .asBuilder()
+            .addStatusValue(StatusValue.SERVER_DELETE_PROHIBITED)
+            .build());
+    runFlowAssertResponse(
+        CommitMode.LIVE, UserPrivileges.SUPERUSER, loadFile("host_delete_response.xml"));
+  }
+
+  @Test
+  void testFailure_pendingDelete_superuser() throws Exception {
+    persistResource(
+        persistActiveHost("ns1.example.tld")
+            .asBuilder()
+            .addStatusValue(StatusValue.PENDING_DELETE)
+            .build());
+    assertAboutEppExceptions()
+        .that(
+            assertThrows(
+                ResourceStatusProhibitsOperationException.class,
+                () -> runFlow(CommitMode.LIVE, UserPrivileges.SUPERUSER)))
+        .marshalsToXml();
   }
 
   @Test

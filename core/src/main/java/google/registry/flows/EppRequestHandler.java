@@ -17,16 +17,17 @@ package google.registry.flows;
 import static google.registry.flows.FlowUtils.marshalWithLenientRetry;
 import static google.registry.model.eppoutput.Result.Code.SUCCESS_AND_CLOSE;
 import static google.registry.xml.XmlTransformer.prettyPrint;
+import static jakarta.servlet.http.HttpServletResponse.SC_BAD_REQUEST;
+import static jakarta.servlet.http.HttpServletResponse.SC_OK;
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static javax.servlet.http.HttpServletResponse.SC_BAD_REQUEST;
-import static javax.servlet.http.HttpServletResponse.SC_OK;
 
 import com.google.common.flogger.FluentLogger;
 import com.google.common.net.MediaType;
 import google.registry.model.eppoutput.EppOutput;
 import google.registry.request.Response;
 import google.registry.util.ProxyHttpHeaders;
-import javax.inject.Inject;
+import google.registry.util.StopwatchLogger;
+import jakarta.inject.Inject;
 
 /** Handle an EPP request and response. */
 public class EppRequestHandler {
@@ -55,7 +56,10 @@ public class EppRequestHandler {
           eppController.handleEppCommand(
               sessionMetadata, credentials, eppRequestSource, isDryRun, isSuperuser, inputXmlBytes);
       response.setContentType(APPLICATION_EPP_XML);
+      final StopwatchLogger stopwatch = new StopwatchLogger();
       byte[] eppResponseXmlBytes = marshalWithLenientRetry(eppOutput);
+      stopwatch.tick("Completed EPP output marshaling.");
+
       response.setPayload(new String(eppResponseXmlBytes, UTF_8));
       logger.atInfo().log(
           "EPP response: %s", prettyPrint(EppXmlSanitizer.sanitizeEppXml(eppResponseXmlBytes)));
@@ -75,17 +79,11 @@ public class EppRequestHandler {
           && eppOutput.getResponse().getResult().getCode() == SUCCESS_AND_CLOSE) {
         response.setHeader(ProxyHttpHeaders.EPP_SESSION, "close");
       }
-      // If a login request returns a success, a logged-in header is added to the response to inform
-      // the proxy that it is no longer necessary to send the full client certificate to the backend
-      // for this connection.
-      if (eppOutput.isResponse()
-          && eppOutput.getResponse().isLoginResponse()
-          && eppOutput.isSuccess()) {
-        response.setHeader(ProxyHttpHeaders.LOGGED_IN, "true");
-      }
     } catch (Exception e) {
       logger.atWarning().withCause(e).log("handleEppCommand general exception.");
       response.setStatus(SC_BAD_REQUEST);
+    } finally {
+      sessionMetadata.save(response);
     }
   }
 }

@@ -63,6 +63,7 @@ public class TextDiffSubject extends Subject {
 
   private final ImmutableList<String> actual;
   private DiffFormat diffFormat = DiffFormat.SIDE_BY_SIDE_MARKDOWN;
+  private ImmutableList<String> comments = ImmutableList.of();
 
   protected TextDiffSubject(FailureMetadata metadata, List<String> actual) {
     super(metadata, actual);
@@ -83,13 +84,27 @@ public class TextDiffSubject extends Subject {
     return this;
   }
 
+  /** If set, ignore lines that start with the given string. */
+  public TextDiffSubject ignoringLinesStartingWith(String... comments) {
+    this.comments = ImmutableList.copyOf(comments);
+    return this;
+  }
+
+  private ImmutableList<String> filterComments(List<String> lines) {
+    return lines.stream()
+        .filter(line -> !line.isBlank())
+        .filter(line -> comments.stream().noneMatch(line::startsWith))
+        .collect(ImmutableList.toImmutableList());
+  }
+
   public void hasSameContentAs(List<String> expectedContent) {
     checkNotNull(expectedContent, "expectedContent");
-    ImmutableList<String> expected = ImmutableList.copyOf(expectedContent);
-    if (expected.equals(actual)) {
+    ImmutableList<String> filteredExpected = filterComments(expectedContent);
+    ImmutableList<String> filteredActual = filterComments(actual);
+    if (filteredExpected.equals(filteredActual)) {
       return;
     }
-    String diffString = diffFormat.generateDiff(expected, actual);
+    String diffString = diffFormat.generateDiff(filteredExpected, filteredActual);
     failWithoutActual(
         Fact.simpleFact(
             Joiner.on('\n')
@@ -175,14 +190,7 @@ public class TextDiffSubject extends Subject {
         .orElse(0);
   }
 
-  private static class SideBySideRowFormatter {
-    private final int maxExpectedLineLength;
-    private final int maxActualLineLength;
-
-    private SideBySideRowFormatter(int maxExpectedLineLength, int maxActualLineLength) {
-      this.maxExpectedLineLength = maxExpectedLineLength;
-      this.maxActualLineLength = maxActualLineLength;
-    }
+  private record SideBySideRowFormatter(int maxExpectedLineLength, int maxActualLineLength) {
 
     public String formatRow(String expected, String actual, char padChar) {
       return String.format(

@@ -16,12 +16,12 @@ package google.registry.dns;
 
 import static google.registry.dns.DnsUtils.requestDomainDnsRefresh;
 import static google.registry.dns.DnsUtils.requestHostDnsRefresh;
-import static google.registry.model.EppResourceUtils.loadByForeignKey;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
 
 import google.registry.dns.DnsUtils.TargetType;
 import google.registry.model.EppResource;
 import google.registry.model.EppResource.ForeignKeyedEppResource;
+import google.registry.model.ForeignKeyUtils;
 import google.registry.model.annotations.ExternalMessagingName;
 import google.registry.model.domain.Domain;
 import google.registry.model.host.Host;
@@ -31,14 +31,14 @@ import google.registry.request.HttpException.NotFoundException;
 import google.registry.request.Parameter;
 import google.registry.request.auth.Auth;
 import google.registry.util.Clock;
-import javax.inject.Inject;
+import jakarta.inject.Inject;
 
 /** Action that manually triggers refresh of DNS information. */
 @Action(
     service = Action.Service.BACKEND,
-    path = "/_dr/dnsRefresh",
+    path = "/_dr/task/dnsRefresh",
     automaticallyPrintOk = true,
-    auth = Auth.AUTH_API_ADMIN)
+    auth = Auth.AUTH_ADMIN)
 public final class RefreshDnsAction implements Runnable {
 
   private final Clock clock;
@@ -63,23 +63,22 @@ public final class RefreshDnsAction implements Runnable {
     tm().transact(
             () -> {
               switch (type) {
-                case DOMAIN:
+                case DOMAIN -> {
                   loadAndVerifyExistence(Domain.class, domainOrHostName);
                   requestDomainDnsRefresh(domainOrHostName);
-                  break;
-                case HOST:
+                }
+                case HOST -> {
                   verifyHostIsSubordinate(loadAndVerifyExistence(Host.class, domainOrHostName));
                   requestHostDnsRefresh(domainOrHostName);
-                  break;
-                default:
-                  throw new BadRequestException("Unsupported type: " + type);
+                }
+                default -> throw new BadRequestException("Unsupported type: " + type);
               }
             });
   }
 
   private <T extends EppResource & ForeignKeyedEppResource>
       T loadAndVerifyExistence(Class<T> clazz, String foreignKey) {
-    return loadByForeignKey(clazz, foreignKey, clock.nowUtc())
+    return ForeignKeyUtils.loadResource(clazz, foreignKey, clock.nowUtc())
         .orElseThrow(
             () ->
                 new NotFoundException(

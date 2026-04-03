@@ -1,0 +1,65 @@
+@if(rdapService.editing) {
+<app-rdap-edit></app-rdap-edit>
+} @else {
+<div class="console-app__rdap">
+  <div class="console-app__rdap-controls">
+    <span>
+      General registrar information for your RDAP record. This information is
+      always visible in RDAP.
+    </span>
+    <div class="spacer"></div>
+    <button
+      mat-flat-button
+      color="primary"
+      aria-label="Edit RDAP record"
+      (click)="rdapService.editing = true"
+    >
+      <mat-icon>edit</mat-icon>
+      Edit
+    </button>
+  </div>
+
+  <mat-card appearance="outlined">
+    <mat-card-content>
+      <mat-list role="list">
+        <mat-list-item role="listitem">
+          <h2>Personal Info</h2>
+        </mat-list-item>
+        <mat-divider></mat-divider>
+        <mat-list-item role="listitem">
+          <span class="console-app__list-key">Company name</span>
+          <span class="console-app__list-value">{{
+            registrarService.registrar()?.registrarName
+          }}</span>
+        </mat-list-item>
+        <mat-divider></mat-divider>
+        <mat-list-item role="listitem">
+          <span class="console-app__list-key">Referral email</span>
+          <span class="console-app__list-value">{{
+            registrarService.registrar()?.emailAddress
+          }}</span>
+        </mat-list-item>
+        <mat-divider></mat-divider>
+        <mat-list-item role="listitem">
+          <span class="console-app__list-key">Phone</span>
+          <span class="console-app__list-value">{{
+            registrarService.registrar()?.phoneNumber
+          }}</span>
+        </mat-list-item>
+        <mat-divider></mat-divider>
+        <mat-list-item role="listitem">
+          <span class="console-app__list-key">Fax</span>
+          <span class="console-app__list-value">{{
+            registrarService.registrar()?.faxNumber
+          }}</span>
+        </mat-list-item>
+        <mat-divider></mat-divider>
+        <mat-list-item role="listitem">
+          <span class="console-app__list-key">Address</span>
+          <span class="console-app__list-value">{{ formattedAddress() }}</span>
+        </mat-list-item>
+      </mat-list>
+    </mat-card-content>
+  </mat-card>
+</div>
+}

@@ -63,7 +63,7 @@ class ListDomainsActionTest extends ListActionTestCase {
   @Test
   void testRun_noParameters() {
     action.tlds = ImmutableSet.of("foo");
-    testRunSuccess(action, null, null, null);
+    testRunSuccess(action, Optional.empty(), Optional.empty(), Optional.empty());
   }
 
   @Test
@@ -100,29 +100,6 @@ class ListDomainsActionTest extends ListActionTestCase {
         "^dolist.bar",
         "^example1.foo$",
         "^example2.foo$");
-  }
-
-  @Test
-  void testRun_moreTldsThanMaxNumSubqueries() {
-    ListDomainsAction.maxNumSubqueries = 2;
-    createTlds("baa", "bab", "bac", "bad");
-    action.tlds = ImmutableSet.of("baa", "bab", "bac", "bad");
-    action.limit = 4;
-    persistActiveDomain("domain1.baa", DateTime.parse("2010-03-04T16:00:00Z"));
-    persistActiveDomain("domain2.bab", DateTime.parse("2009-03-04T16:00:00Z"));
-    persistActiveDomain("domain3.bac", DateTime.parse("2011-03-04T16:00:00Z"));
-    persistActiveDomain("domain4.bad", DateTime.parse("2010-06-04T16:00:00Z"));
-    persistActiveDomain("domain5.baa", DateTime.parse("2008-01-04T16:00:00Z"));
-    // Since the limit is 4, expect all but domain5.baa (the oldest), sorted by creationTime asc.
-    testRunSuccess(
-        action,
-        Optional.empty(),
-        Optional.empty(),
-        Optional.empty(),
-        "^domain2.bab$",
-        "^domain1.baa$",
-        "^domain4.bad$",
-        "^domain3.bac$");
   }
 
   @Test
@@ -168,7 +145,7 @@ class ListDomainsActionTest extends ListActionTestCase {
         "^domainName\\s+repoId\\s*$",
         "^-+\\s+-+\\s*$",
         "^example1.foo\\s+2-FOO\\s*$",
-        "^example3.foo\\s+4-FOO\\s*$");
+        "^example3.foo\\s+3-FOO\\s*$");
   }
 
   @Test
@@ -182,7 +159,7 @@ class ListDomainsActionTest extends ListActionTestCase {
         Optional.of(false),
         Optional.empty(),
         "^example1.foo  2-FOO$",
-        "^example3.foo  4-FOO$");
+        "^example3.foo  3-FOO$");
   }
 
   @Test
@@ -198,7 +175,7 @@ class ListDomainsActionTest extends ListActionTestCase {
         "^domainName\\s+repoId\\s*$",
         "^-+\\s+-+\\s*$",
         "^example1.foo\\s+2-FOO\\s*$",
-        "^example3.foo\\s+4-FOO\\s*$");
+        "^example3.foo\\s+3-FOO\\s*$");
   }
 
   @Test
@@ -214,7 +191,7 @@ class ListDomainsActionTest extends ListActionTestCase {
         "^domainName\\s+.*repoId",
         "^-+\\s+-+",
         "^example1.foo\\s+.*2-FOO",
-        "^example3.foo\\s+.*4-FOO");
+        "^example3.foo\\s+.*3-FOO");
   }
 
   @Test
@@ -230,7 +207,7 @@ class ListDomainsActionTest extends ListActionTestCase {
         "^domainName\\s+.*repoId",
         "^-+\\s+-+",
         "^example1.foo\\s+.*2-FOO",
-        "^example3.foo\\s+.*4-FOO");
+        "^example3.foo\\s+.*3-FOO");
   }
 
   @Test

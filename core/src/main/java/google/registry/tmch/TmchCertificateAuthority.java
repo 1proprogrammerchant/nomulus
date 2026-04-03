@@ -29,6 +29,7 @@ import google.registry.model.CacheUtils;
 import google.registry.model.tmch.TmchCrl;
 import google.registry.util.Clock;
 import google.registry.util.X509Utils;
+import jakarta.inject.Inject;
 import java.security.GeneralSecurityException;
 import java.security.cert.CertificateParsingException;
 import java.security.cert.X509CRL;
@@ -36,7 +37,6 @@ import java.security.cert.X509Certificate;
 import java.util.Optional;
 import javax.annotation.concurrent.Immutable;
 import javax.annotation.concurrent.ThreadSafe;
-import javax.inject.Inject;
 
 /**
  * Helper methods for accessing ICANN's TMCH root certificate and revocation list.
@@ -80,7 +80,7 @@ public final class TmchCertificateAuthority {
   private static final LoadingCache<TmchCaMode, X509CRL> CRL_CACHE =
       CacheUtils.newCacheBuilder(getSingletonCacheRefreshDuration())
           .build(
-              new CacheLoader<TmchCaMode, X509CRL>() {
+              new CacheLoader<>() {
                 @Override
                 public X509CRL load(final TmchCaMode tmchCaMode) throws GeneralSecurityException {
                   Optional<TmchCrl> storedCrl = TmchCrl.get();
@@ -127,7 +127,7 @@ public final class TmchCertificateAuthority {
    */
   public void verify(X509Certificate cert) throws GeneralSecurityException {
     synchronized (TmchCertificateAuthority.class) {
-      X509Utils.verifyCertificate(getAndValidateRoot(), getCrl(), cert, clock.nowUtc().toDate());
+      X509Utils.verifyCertificate(getAndValidateRoot(), getCrl(), cert, clock.nowUtc());
     }
   }
 
@@ -151,7 +151,7 @@ public final class TmchCertificateAuthority {
     } catch (Exception e) {
       logger.atWarning().withCause(e).log("Old CRL is invalid, ignored during CRL update.");
     }
-    X509Utils.verifyCrl(getAndValidateRoot(), oldCrl, newCrl, clock.nowUtc().toDate());
+    X509Utils.verifyCrl(getAndValidateRoot(), oldCrl, newCrl, clock.nowUtc());
     TmchCrl.set(asciiCrl, url);
   }
 

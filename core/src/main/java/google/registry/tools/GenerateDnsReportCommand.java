@@ -30,13 +30,13 @@ import google.registry.model.host.Host;
 import google.registry.persistence.transaction.QueryComposer.Comparator;
 import google.registry.tools.params.PathParameter;
 import google.registry.util.Clock;
+import jakarta.inject.Inject;
 import java.net.InetAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
-import javax.inject.Inject;
 import org.joda.time.DateTime;
 import org.json.simple.JSONValue;
 
@@ -62,7 +62,7 @@ final class GenerateDnsReportCommand implements Command {
   @Override
   public void run() throws Exception {
     assertTldExists(tld);
-    Files.write(output, new Generator().generate().getBytes(US_ASCII));
+    Files.writeString(output, new Generator().generate(), US_ASCII);
   }
 
   private class Generator {
@@ -81,7 +81,7 @@ final class GenerateDnsReportCommand implements Command {
                           .list());
       for (Domain domain : domains) {
         // Skip deleted domains and domains that don't get published to DNS.
-        if (isBeforeOrAt(domain.getDeletionTime(), now) || !domain.shouldPublishToDns()) {
+        if (isBeforeOrAt(domain.getDeletionDateTime(), now) || !domain.shouldPublishToDns()) {
           continue;
         }
         write(domain);
@@ -90,7 +90,7 @@ final class GenerateDnsReportCommand implements Command {
       Iterable<Host> nameservers = tm().transact(() -> tm().loadAllOf(Host.class));
       for (Host nameserver : nameservers) {
         // Skip deleted hosts and external hosts.
-        if (isBeforeOrAt(nameserver.getDeletionTime(), now)
+        if (isBeforeOrAt(nameserver.getDeletionDateTime(), now)
             || nameserver.getInetAddresses().isEmpty()) {
           continue;
         }

@@ -15,13 +15,15 @@
 package google.registry.tools;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.common.truth.Truth8.assertThat;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
 import static google.registry.testing.DatabaseHelper.persistResource;
 import static google.registry.util.DateTimeUtils.END_OF_TIME;
+import static org.joda.money.CurrencyUnit.USD;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import com.google.common.collect.ImmutableSet;
 import google.registry.model.billing.BillingBase.RenewalPriceBehavior;
+import google.registry.model.domain.fee.FeeQueryCommandExtensionItem.CommandName;
 import google.registry.model.domain.token.AllocationToken;
 import google.registry.model.domain.token.AllocationToken.TokenType;
 import google.registry.model.domain.token.BulkPricingPackage;
@@ -30,7 +32,6 @@ import org.joda.money.CurrencyUnit;
 import org.joda.money.Money;
 import org.joda.time.DateTime;
 import org.junit.jupiter.api.Test;
-import org.testcontainers.shaded.com.google.common.collect.ImmutableSet;
 
 /** Unit tests for {@link CreateBulkPricingPackageCommand}. */
 public class CreateBulkPricingPackageCommandTest
@@ -46,13 +47,15 @@ public class CreateBulkPricingPackageCommandTest
             .setAllowedTlds(ImmutableSet.of("foo"))
             .setAllowedRegistrarIds(ImmutableSet.of("TheRegistrar"))
             .setRenewalPriceBehavior(RenewalPriceBehavior.SPECIFIED)
-            .setDiscountFraction(1)
+            .setRenewalPrice(Money.of(USD, 0))
+            .setAllowedEppActions(ImmutableSet.of(CommandName.CREATE))
+            .setDiscountFraction(1.0)
             .build());
     runCommandForced(
         "--max_domains=100",
         "--max_creates=500",
         "--price=USD 1000.00",
-        "--next_billing_date=2012-03-17",
+        "--next_billing_date=2012-03-17T00:00:00Z",
         "abc123");
 
     Optional<BulkPricingPackage> bulkPricingPackageOptional =
@@ -77,7 +80,8 @@ public class CreateBulkPricingPackageCommandTest
             .setAllowedTlds(ImmutableSet.of("foo"))
             .setAllowedRegistrarIds(ImmutableSet.of("TheRegistrar"))
             .setRenewalPriceBehavior(RenewalPriceBehavior.SPECIFIED)
-            .setDiscountFraction(1)
+            .setRenewalPrice(Money.of(USD, 0))
+            .setDiscountFraction(1.0)
             .build());
     IllegalArgumentException thrown =
         assertThrows(
@@ -121,7 +125,9 @@ public class CreateBulkPricingPackageCommandTest
             .setAllowedTlds(ImmutableSet.of("foo"))
             .setAllowedRegistrarIds(ImmutableSet.of("TheRegistrar"))
             .setRenewalPriceBehavior(RenewalPriceBehavior.SPECIFIED)
-            .setDiscountFraction(1)
+            .setRenewalPrice(Money.of(USD, 0))
+            .setAllowedEppActions(ImmutableSet.of(CommandName.CREATE))
+            .setDiscountFraction(1.0)
             .build());
     runCommandForced(
         "--max_domains=100",
@@ -156,9 +162,11 @@ public class CreateBulkPricingPackageCommandTest
             .setAllowedTlds(ImmutableSet.of("foo"))
             .setAllowedRegistrarIds(ImmutableSet.of("TheRegistrar"))
             .setRenewalPriceBehavior(RenewalPriceBehavior.SPECIFIED)
-            .setDiscountFraction(1)
+            .setRenewalPrice(Money.of(USD, 0))
+            .setAllowedEppActions(ImmutableSet.of(CommandName.CREATE))
+            .setDiscountFraction(1.0)
             .build());
-    runCommandForced("--price=USD 1000.00", "--next_billing_date=2012-03-17", "abc123");
+    runCommandForced("--price=USD 1000.00", "--next_billing_date=2012-03-17T00:00:00Z", "abc123");
     Optional<BulkPricingPackage> bulkPricingPackageOptional =
         tm().transact(() -> BulkPricingPackage.loadByTokenString("abc123"));
     assertThat(bulkPricingPackageOptional).isPresent();
@@ -181,7 +189,9 @@ public class CreateBulkPricingPackageCommandTest
             .setAllowedTlds(ImmutableSet.of("foo"))
             .setAllowedRegistrarIds(ImmutableSet.of("TheRegistrar"))
             .setRenewalPriceBehavior(RenewalPriceBehavior.SPECIFIED)
-            .setDiscountFraction(1)
+            .setRenewalPrice(Money.of(USD, 0))
+            .setAllowedEppActions(ImmutableSet.of(CommandName.CREATE))
+            .setDiscountFraction(1.0)
             .build());
     runCommandForced("--max_domains=100", "--max_creates=500", "--price=USD 1000.00", "abc123");
 
@@ -206,7 +216,9 @@ public class CreateBulkPricingPackageCommandTest
             .setAllowedTlds(ImmutableSet.of("foo"))
             .setAllowedRegistrarIds(ImmutableSet.of("TheRegistrar"))
             .setRenewalPriceBehavior(RenewalPriceBehavior.SPECIFIED)
-            .setDiscountFraction(1)
+            .setRenewalPrice(Money.of(USD, 0))
+            .setAllowedEppActions(ImmutableSet.of(CommandName.CREATE))
+            .setDiscountFraction(1.0)
             .build());
     IllegalArgumentException thrown =
         assertThrows(

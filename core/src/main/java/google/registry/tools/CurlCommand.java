@@ -21,12 +21,15 @@ import com.beust.jcommander.IStringConverter;
 import com.beust.jcommander.Parameter;
 import com.beust.jcommander.Parameters;
 import com.beust.jcommander.converters.IParameterSplitter;
+import com.google.common.base.Ascii;
 import com.google.common.base.Joiner;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.net.MediaType;
+import google.registry.config.RegistryConfig.Config;
 import google.registry.request.Action.Service;
+import jakarta.inject.Inject;
 import java.util.List;
 
 @Parameters(separators = " =", commandDescription = "Send an HTTP command to the nomulus server.")
@@ -73,12 +76,11 @@ class CurlCommand implements CommandWithConnection {
       names = {"--service"},
       description = "Which service to connect to",
       required = true)
-  private Service service;
+  private String serviceName;
 
-  @Parameter(
-      names = {"--canary"},
-      description = "If set, use the canary end-point; otherwise use the regular end-point.")
-  private Boolean canary = Boolean.FALSE;
+  @Inject
+  @Config("useCanary")
+  boolean useCanary;
 
   @Override
   public void setConnection(ServiceConnection connection) {
@@ -95,7 +97,8 @@ class CurlCommand implements CommandWithConnection {
       throw new IllegalArgumentException("You may not specify a body for a get method.");
     }
 
-    ServiceConnection connectionToService = connection.withService(service, canary);
+    Service service = Service.valueOf(Ascii.toUpperCase(serviceName));
+    ServiceConnection connectionToService = connection.withService(service, useCanary);
     String response =
         (method == Method.GET)
             ? connectionToService.sendGetRequest(path, ImmutableMap.<String, String>of())

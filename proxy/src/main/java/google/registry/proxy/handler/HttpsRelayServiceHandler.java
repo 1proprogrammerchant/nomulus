@@ -62,6 +62,7 @@ import javax.net.ssl.SSLHandshakeException;
 public abstract class HttpsRelayServiceHandler extends ByteToMessageCodec<FullHttpResponse> {
 
   private static final FluentLogger logger = FluentLogger.forEnclosingClass();
+  private static final String CANARY_HEADER = "canary";
 
   protected static final ImmutableSet<Class<? extends Exception>> NON_FATAL_INBOUND_EXCEPTIONS =
       ImmutableSet.of(ReadTimeoutException.class, SSLHandshakeException.class);
@@ -69,9 +70,10 @@ public abstract class HttpsRelayServiceHandler extends ByteToMessageCodec<FullHt
   protected static final ImmutableSet<Class<? extends Exception>> NON_FATAL_OUTBOUND_EXCEPTIONS =
       ImmutableSet.of(NonOkHttpResponseException.class);
 
-  private final Map<String, Cookie> cookieStore = new LinkedHashMap<>();
+  protected final Map<String, Cookie> cookieStore = new LinkedHashMap<>();
   private final String relayHost;
   private final String relayPath;
+  private final boolean canary;
   private final Supplier<String> idTokenSupplier;
 
   protected final FrontendMetrics metrics;
@@ -79,10 +81,12 @@ public abstract class HttpsRelayServiceHandler extends ByteToMessageCodec<FullHt
   HttpsRelayServiceHandler(
       String relayHost,
       String relayPath,
+      boolean canary,
       Supplier<String> idTokenSupplier,
       FrontendMetrics metrics) {
     this.relayHost = relayHost;
     this.relayPath = relayPath;
+    this.canary = canary;
     this.idTokenSupplier = idTokenSupplier;
     this.metrics = metrics;
   }
@@ -104,6 +108,9 @@ public abstract class HttpsRelayServiceHandler extends ByteToMessageCodec<FullHt
         .set(HttpHeaderNames.HOST, relayHost)
         .set(HttpHeaderNames.AUTHORIZATION, "Bearer " + idTokenSupplier.get())
         .setInt(HttpHeaderNames.CONTENT_LENGTH, byteBuf.readableBytes());
+    if (canary) {
+      request.headers().set(CANARY_HEADER, "true");
+    }
     request.content().writeBytes(byteBuf);
     return request;
   }
@@ -202,7 +209,7 @@ public abstract class HttpsRelayServiceHandler extends ByteToMessageCodec<FullHt
     super.write(ctx, msg, promise);
   }
 
-  /** Exception thrown when the response status from GAE is not 200. */
+  /** Exception thrown when the response status from Nomulus is not 200. */
   public static class NonOkHttpResponseException extends Exception {
 
     private static final long serialVersionUID = 5340993059579288708L;

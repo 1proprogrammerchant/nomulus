@@ -23,10 +23,10 @@ import google.registry.model.tmch.ClaimsList;
 import google.registry.model.tmch.ClaimsListDao;
 import google.registry.request.Action;
 import google.registry.request.auth.Auth;
+import jakarta.inject.Inject;
 import java.io.IOException;
 import java.security.GeneralSecurityException;
 import java.util.Optional;
-import javax.inject.Inject;
 import org.bouncycastle.openpgp.PGPException;
 
 /** Action to download the latest domain name list (aka claims list) from MarksDB. */
@@ -35,7 +35,7 @@ import org.bouncycastle.openpgp.PGPException;
     path = "/_dr/task/tmchDnl",
     method = POST,
     automaticallyPrintOk = true,
-    auth = Auth.AUTH_API_ADMIN)
+    auth = Auth.AUTH_ADMIN)
 public final class TmchDnlAction implements Runnable {
 
   private static final FluentLogger logger = FluentLogger.forEnclosingClass();

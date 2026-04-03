@@ -40,7 +40,7 @@ import java.util.Optional;
 abstract class RdapSearchResults {
 
   /** Responding To Searches defined in 8 of RFC 9083. */
-  abstract static class BaseSearchResponse extends ReplyPayloadBase {
+  public abstract static class BaseSearchResponse extends ReplyPayloadBase {
     abstract IncompletenessWarningType incompletenessWarningType();
     abstract ImmutableMap<String, URI> navigationLinks();
 
@@ -120,7 +120,7 @@ abstract class RdapSearchResults {
   }
 
   @AutoValue
-  abstract static class EntitySearchResponse extends BaseSearchResponse {
+  public abstract static class EntitySearchResponse extends BaseSearchResponse {
 
     @JsonableElement public abstract ImmutableList<RdapEntity> entitySearchResults();
 
@@ -141,7 +141,7 @@ abstract class RdapSearchResults {
   }
 
   @AutoValue
-  abstract static class NameserverSearchResponse extends BaseSearchResponse {
+  public abstract static class NameserverSearchResponse extends BaseSearchResponse {
 
     @JsonableElement public abstract ImmutableList<RdapNameserver> nameserverSearchResults();
 

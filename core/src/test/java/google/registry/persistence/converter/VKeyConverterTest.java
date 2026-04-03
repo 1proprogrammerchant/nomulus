@@ -16,15 +16,15 @@ package google.registry.persistence.converter;
 
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
-import static google.registry.testing.DatabaseHelper.insertInDb;
+import static google.registry.testing.DatabaseHelper.persistResources;
 
 import google.registry.model.ImmutableObject;
 import google.registry.persistence.VKey;
 import google.registry.persistence.WithVKey;
 import google.registry.persistence.transaction.JpaTestExtensions;
 import google.registry.persistence.transaction.JpaTestExtensions.JpaUnitTestExtension;
-import javax.persistence.Entity;
-import javax.persistence.Id;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Id;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
@@ -50,7 +50,7 @@ public class VKeyConverterTest {
     TestLongEntity longEntity = new TestLongEntity(300L);
     VKey<TestLongEntity> longKey = VKey.create(TestLongEntity.class, 300L);
     TestEntity original = new TestEntity(1984L, stringKey, longKey);
-    insertInDb(stringEntity, longEntity, original);
+    persistResources(stringEntity, longEntity, original);
 
     TestEntity retrieved =
         tm().transact(() -> tm().getEntityManager().find(TestEntity.class, 1984L));

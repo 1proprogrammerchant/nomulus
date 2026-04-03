@@ -16,12 +16,14 @@ package google.registry.beam.billing;
 
 import static com.google.common.truth.Truth.assertThat;
 
+import google.registry.beam.billing.BillingEvent.BillingEventCoder;
 import google.registry.beam.billing.BillingEvent.InvoiceGroupingKey;
 import google.registry.beam.billing.BillingEvent.InvoiceGroupingKey.InvoiceGroupingKeyCoder;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import org.apache.beam.sdk.coders.NullableCoder;
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
 import org.junit.jupiter.api.BeforeEach;
@@ -83,7 +85,7 @@ class BillingEventTest {
     assertThat(invoiceKey.startDate()).isEqualTo("2017-10-01");
     assertThat(invoiceKey.endDate()).isEqualTo("2022-09-30");
     assertThat(invoiceKey.productAccountKey()).isEqualTo("12345-CRRHELLO");
-    assertThat(invoiceKey.usageGroupingKey()).isEqualTo("myRegistrar");
+    assertThat(invoiceKey.usageGroupingKey()).isEqualTo("");
     assertThat(invoiceKey.description()).isEqualTo("RENEW | TLD: test | TERM: 5-year");
     assertThat(invoiceKey.unitPrice()).isEqualTo(20.5);
     assertThat(invoiceKey.unitPriceCurrency()).isEqualTo("USD");
@@ -104,7 +106,7 @@ class BillingEventTest {
     assertThat(invoiceKey.toCsv(3L))
         .isEqualTo(
             "2017-10-01,2022-09-30,12345-CRRHELLO,61.50,USD,10125,1,PURCHASE,"
-                + "myRegistrar,3,RENEW | TLD: test | TERM: 5-year,20.50,USD,");
+                + ",3,RENEW | TLD: test | TERM: 5-year,20.50,USD,");
   }
 
   @Test
@@ -114,17 +116,26 @@ class BillingEventTest {
     assertThat(invoiceKey.toCsv(3L))
         .isEqualTo(
             "2017-10-01,,12345-CRRHELLO,61.50,USD,10125,1,PURCHASE,"
-                + "myRegistrar,3,RENEW | TLD: test | TERM: 0-year,20.50,USD,");
+                + ",3,RENEW | TLD: test | TERM: 0-year,20.50,USD,");
   }
 
   @Test
   void testInvoiceGroupingKeyCoder_deterministicSerialization() throws IOException {
     InvoiceGroupingKey invoiceKey = event.getInvoiceGroupingKey();
-    InvoiceGroupingKeyCoder coder = new InvoiceGroupingKeyCoder();
+    InvoiceGroupingKeyCoder coder = InvoiceGroupingKeyCoder.of();
     ByteArrayOutputStream outStream = new ByteArrayOutputStream();
     coder.encode(invoiceKey, outStream);
     InputStream inStream = new ByteArrayInputStream(outStream.toByteArray());
     assertThat(coder.decode(inStream)).isEqualTo(invoiceKey);
+  }
+
+  @Test
+  void testBillingEventCoder_deterministicSerialization() throws IOException {
+    NullableCoder<BillingEvent> coder = BillingEventCoder.ofNullable();
+    ByteArrayOutputStream outStream = new ByteArrayOutputStream();
+    coder.encode(event, outStream);
+    InputStream inStream = new ByteArrayInputStream(outStream.toByteArray());
+    assertThat(coder.decode(inStream)).isEqualTo(event);
   }
 
   @Test

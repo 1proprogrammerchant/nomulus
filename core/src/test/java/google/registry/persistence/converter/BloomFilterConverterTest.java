@@ -13,19 +13,19 @@
 // limitations under the License.
 package google.registry.persistence.converter;
 
-import static com.google.common.base.Charsets.US_ASCII;
 import static com.google.common.hash.Funnels.stringFunnel;
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
-import static google.registry.testing.DatabaseHelper.insertInDb;
+import static google.registry.testing.DatabaseHelper.persistResource;
+import static java.nio.charset.StandardCharsets.US_ASCII;
 
 import com.google.common.collect.ImmutableSet;
 import com.google.common.hash.BloomFilter;
 import google.registry.model.ImmutableObject;
 import google.registry.persistence.transaction.JpaTestExtensions;
 import google.registry.persistence.transaction.JpaTestExtensions.JpaUnitTestExtension;
-import javax.persistence.Entity;
-import javax.persistence.Id;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Id;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
@@ -41,7 +41,7 @@ class BloomFilterConverterTest {
     BloomFilter<String> bloomFilter = BloomFilter.create(stringFunnel(US_ASCII), 3);
     ImmutableSet.of("foo", "bar", "baz").forEach(bloomFilter::put);
     TestEntity entity = new TestEntity(bloomFilter);
-    insertInDb(entity);
+    persistResource(entity);
     TestEntity persisted =
         tm().transact(() -> tm().getEntityManager().find(TestEntity.class, "id"));
     assertThat(persisted.bloomFilter).isEqualTo(bloomFilter);

@@ -20,12 +20,13 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.flogger.FluentLogger;
 import google.registry.keyring.api.KeyModule.Key;
 import google.registry.model.smd.SignedMarkRevocationList;
+import google.registry.model.smd.SignedMarkRevocationListDao;
 import google.registry.request.Action;
 import google.registry.request.auth.Auth;
+import jakarta.inject.Inject;
 import java.io.IOException;
 import java.security.GeneralSecurityException;
 import java.util.Optional;
-import javax.inject.Inject;
 import org.bouncycastle.openpgp.PGPException;
 
 /** Action to download the latest signed mark revocation list from MarksDB. */
@@ -34,7 +35,7 @@ import org.bouncycastle.openpgp.PGPException;
     path = "/_dr/task/tmchSmdrl",
     method = POST,
     automaticallyPrintOk = true,
-    auth = Auth.AUTH_API_ADMIN)
+    auth = Auth.AUTH_ADMIN)
 public final class TmchSmdrlAction implements Runnable {
 
   private static final FluentLogger logger = FluentLogger.forEnclosingClass();
@@ -56,7 +57,7 @@ public final class TmchSmdrlAction implements Runnable {
     } catch (GeneralSecurityException | IOException | PGPException e) {
       throw new RuntimeException(e);
     }
-    smdrl.save();
+    smdrl = SignedMarkRevocationListDao.save(smdrl);
     logger.atInfo().log(
         "Inserted %,d smd revocations into the database, created at %s.",
         smdrl.size(), smdrl.getCreationTime());

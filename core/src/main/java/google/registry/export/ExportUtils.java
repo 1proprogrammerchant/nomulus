@@ -20,9 +20,9 @@ import google.registry.model.tld.Tld;
 import google.registry.model.tld.label.ReservedList;
 import google.registry.model.tld.label.ReservedList.ReservedListEntry;
 import google.registry.model.tld.label.ReservedListDao;
+import jakarta.inject.Inject;
 import java.util.Set;
 import java.util.TreeSet;
-import javax.inject.Inject;
 
 /** Container class for exported-related utility methods. */
 public final class ExportUtils {
@@ -46,10 +46,8 @@ public final class ExportUtils {
                   () ->
                       new IllegalStateException(
                           String.format("Reserved list %s does not exist", reservedListName)));
-      if (reservedList.getShouldPublish()) {
-        for (ReservedListEntry entry : reservedList.getReservedListEntries().values()) {
-          reservedTerms.add(entry.getDomainLabel());
-        }
+      for (ReservedListEntry entry : reservedList.getReservedListEntries().values()) {
+        reservedTerms.add(entry.getDomainLabel());
       }
     }
     Joiner.on("\n").appendTo(termsBuilder, reservedTerms);

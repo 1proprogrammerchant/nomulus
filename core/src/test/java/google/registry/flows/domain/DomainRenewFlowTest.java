@@ -15,7 +15,6 @@
 package google.registry.flows.domain;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.common.truth.Truth8.assertThat;
 import static google.registry.flows.domain.DomainTransferFlowTestCase.persistWithPendingTransfer;
 import static google.registry.model.billing.BillingBase.RenewalPriceBehavior.DEFAULT;
 import static google.registry.model.billing.BillingBase.RenewalPriceBehavior.NONPREMIUM;
@@ -52,7 +51,6 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.Iterables;
-import com.google.common.truth.Truth8;
 import google.registry.flows.EppException;
 import google.registry.flows.EppRequestSource;
 import google.registry.flows.FlowUtils.NotLoggedInException;
@@ -71,14 +69,13 @@ import google.registry.flows.domain.DomainFlowUtils.NotAuthorizedForTldException
 import google.registry.flows.domain.DomainFlowUtils.RegistrarMustBeActiveForThisOperationException;
 import google.registry.flows.domain.DomainFlowUtils.UnsupportedFeeAttributeException;
 import google.registry.flows.domain.DomainRenewFlow.IncorrectCurrentExpirationDateException;
+import google.registry.flows.domain.token.AllocationTokenFlowUtils;
 import google.registry.flows.domain.token.AllocationTokenFlowUtils.AllocationTokenNotInPromotionException;
-import google.registry.flows.domain.token.AllocationTokenFlowUtils.AllocationTokenNotValidForDomainException;
 import google.registry.flows.domain.token.AllocationTokenFlowUtils.AllocationTokenNotValidForRegistrarException;
-import google.registry.flows.domain.token.AllocationTokenFlowUtils.AllocationTokenNotValidForTldException;
 import google.registry.flows.domain.token.AllocationTokenFlowUtils.AlreadyRedeemedAllocationTokenException;
-import google.registry.flows.domain.token.AllocationTokenFlowUtils.InvalidAllocationTokenException;
-import google.registry.flows.domain.token.AllocationTokenFlowUtils.MissingRemoveDomainTokenOnBulkPricingDomainException;
-import google.registry.flows.domain.token.AllocationTokenFlowUtils.RemoveDomainTokenOnNonBulkPricingDomainException;
+import google.registry.flows.domain.token.AllocationTokenFlowUtils.MissingRemoveBulkPricingTokenOnBulkPricingDomainException;
+import google.registry.flows.domain.token.AllocationTokenFlowUtils.NonexistentAllocationTokenException;
+import google.registry.flows.domain.token.AllocationTokenFlowUtils.RemoveBulkPricingTokenOnNonBulkPricingDomainException;
 import google.registry.flows.exceptions.ResourceStatusProhibitsOperationException;
 import google.registry.model.billing.BillingBase.Flag;
 import google.registry.model.billing.BillingBase.Reason;
@@ -123,11 +120,13 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
           "CURRENCY", "USD");
 
   private static final ImmutableMap<String, String> FEE_06_MAP =
-      updateSubstitutions(FEE_BASE_MAP, "FEE_VERSION", "0.6", "FEE_NS", "fee");
+      updateSubstitutions(FEE_BASE_MAP, "FEE_VERSION", "fee-0.6", "FEE_NS", "fee");
   private static final ImmutableMap<String, String> FEE_11_MAP =
-      updateSubstitutions(FEE_BASE_MAP, "FEE_VERSION", "0.11", "FEE_NS", "fee11");
+      updateSubstitutions(FEE_BASE_MAP, "FEE_VERSION", "fee-0.11", "FEE_NS", "fee11");
   private static final ImmutableMap<String, String> FEE_12_MAP =
-      updateSubstitutions(FEE_BASE_MAP, "FEE_VERSION", "0.12", "FEE_NS", "fee12");
+      updateSubstitutions(FEE_BASE_MAP, "FEE_VERSION", "fee-0.12", "FEE_NS", "fee12");
+  private static final ImmutableMap<String, String> FEE_STD_1_0_MAP =
+      updateSubstitutions(FEE_BASE_MAP, "FEE_VERSION", "epp:fee-1.0", "FEE_NS", "fee1_00");
 
   private final DateTime expirationTime = DateTime.parse("2000-04-03T22:00:00.0Z");
 
@@ -153,53 +152,50 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
       StatusValue... statusValues)
       throws Exception {
     Domain domain = DatabaseHelper.newDomain(getUniqueIdFromCommand());
-    tm().transact(
-            () -> {
-              try {
-                DomainHistory historyEntryDomainCreate =
-                    new DomainHistory.Builder()
-                        .setDomain(domain)
-                        .setType(HistoryEntry.Type.DOMAIN_CREATE)
-                        .setModificationTime(clock.nowUtc())
-                        .setRegistrarId(domain.getCreationRegistrarId())
-                        .build();
-                BillingRecurrence autorenewEvent =
-                    new BillingRecurrence.Builder()
-                        .setReason(Reason.RENEW)
-                        .setFlags(ImmutableSet.of(Flag.AUTO_RENEW))
-                        .setTargetId(getUniqueIdFromCommand())
-                        .setRegistrarId("TheRegistrar")
-                        .setEventTime(expirationTime)
-                        .setRecurrenceEndTime(END_OF_TIME)
-                        .setDomainHistory(historyEntryDomainCreate)
-                        .setRenewalPriceBehavior(renewalPriceBehavior)
-                        .setRenewalPrice(renewalPrice)
-                        .build();
-                PollMessage.Autorenew autorenewPollMessage =
-                    new PollMessage.Autorenew.Builder()
-                        .setTargetId(getUniqueIdFromCommand())
-                        .setRegistrarId("TheRegistrar")
-                        .setEventTime(expirationTime)
-                        .setAutorenewEndTime(END_OF_TIME)
-                        .setMsg("Domain was auto-renewed.")
-                        .setHistoryEntry(historyEntryDomainCreate)
-                        .build();
-                Domain newDomain =
-                    domain
-                        .asBuilder()
-                        .setRegistrationExpirationTime(expirationTime)
-                        .setStatusValues(ImmutableSet.copyOf(statusValues))
-                        .setAutorenewBillingEvent(autorenewEvent.createVKey())
-                        .setAutorenewPollMessage(autorenewPollMessage.createVKey())
-                        .build();
-                persistResources(
-                    ImmutableSet.of(
-                        historyEntryDomainCreate, autorenewEvent,
-                        autorenewPollMessage, newDomain));
-              } catch (Exception e) {
-                throw new RuntimeException("Error persisting domain", e);
-              }
-            });
+    try {
+      DomainHistory historyEntryDomainCreate =
+          new DomainHistory.Builder()
+              .setDomain(domain)
+              .setType(HistoryEntry.Type.DOMAIN_CREATE)
+              .setModificationTime(clock.nowUtc())
+              .setRegistrarId(domain.getCreationRegistrarId())
+              .build();
+      BillingRecurrence autorenewEvent =
+          new BillingRecurrence.Builder()
+              .setReason(Reason.RENEW)
+              .setFlags(ImmutableSet.of(Flag.AUTO_RENEW))
+              .setTargetId(getUniqueIdFromCommand())
+              .setRegistrarId("TheRegistrar")
+              .setEventTime(expirationTime)
+              .setRecurrenceEndTime(END_OF_TIME)
+              .setDomainHistory(historyEntryDomainCreate)
+              .setRenewalPriceBehavior(renewalPriceBehavior)
+              .setRenewalPrice(renewalPrice)
+              .build();
+      PollMessage.Autorenew autorenewPollMessage =
+          new PollMessage.Autorenew.Builder()
+              .setTargetId(getUniqueIdFromCommand())
+              .setRegistrarId("TheRegistrar")
+              .setEventTime(expirationTime)
+              .setAutorenewEndTime(END_OF_TIME)
+              .setMsg("Domain was auto-renewed.")
+              .setHistoryEntry(historyEntryDomainCreate)
+              .build();
+      Domain newDomain =
+          domain
+              .asBuilder()
+              .setRegistrationExpirationTime(expirationTime)
+              .setStatusValues(ImmutableSet.copyOf(statusValues))
+              .setAutorenewBillingEvent(autorenewEvent.createVKey())
+              .setAutorenewPollMessage(autorenewPollMessage.createVKey())
+              .build();
+      persistResources(
+          ImmutableSet.of(
+              historyEntryDomainCreate, autorenewEvent,
+              autorenewPollMessage, newDomain));
+    } catch (Exception e) {
+      throw new RuntimeException("Error persisting domain", e);
+    }
     clock.advanceOneMilli();
   }
 
@@ -250,8 +246,8 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
       RenewalPriceBehavior renewalPriceBehavior,
       @Nullable Money renewalPrice)
       throws Exception {
-    assertTransactionalFlow(true);
-    DateTime currentExpiration = reloadResourceByForeignKey().getRegistrationExpirationTime();
+    assertMutatingFlow(true);
+    DateTime currentExpiration = reloadResourceByForeignKey().getRegistrationExpirationDateTime();
     DateTime newExpiration = currentExpiration.plusYears(renewalYears);
     runFlowAssertResponse(
         CommitMode.LIVE, userPrivileges, loadFile(responseFilename, substitutions));
@@ -307,7 +303,7 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
             .setFlags(ImmutableSet.of(Flag.AUTO_RENEW))
             .setTargetId(getUniqueIdFromCommand())
             .setRegistrarId("TheRegistrar")
-            .setEventTime(domain.getRegistrationExpirationTime())
+            .setEventTime(domain.getRegistrationExpirationDateTime())
             .setRecurrenceEndTime(END_OF_TIME)
             .setDomainHistory(historyEntryDomainRenew)
             .build());
@@ -317,7 +313,7 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
         new PollMessage.Autorenew.Builder()
             .setTargetId(getUniqueIdFromCommand())
             .setRegistrarId("TheRegistrar")
-            .setEventTime(domain.getRegistrationExpirationTime())
+            .setEventTime(domain.getRegistrationExpirationDateTime())
             .setAutorenewEndTime(END_OF_TIME)
             .setMsg("Domain was auto-renewed.")
             .setHistoryEntry(historyEntryDomainRenew)
@@ -396,7 +392,7 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
   }
 
   @Test
-  void testSuccess_internalRegiration_premiumDomain() throws Exception {
+  void testSuccess_internalRegiration_premiumDomain_std_v1() throws Exception {
     persistResource(
         Tld.get("tld")
             .asBuilder()
@@ -404,7 +400,8 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
             .build());
     persistDomain(SPECIFIED, Money.of(USD, 2));
     setRegistrarIdForFlow("NewRegistrar");
-    ImmutableMap<String, String> customFeeMap = updateSubstitutions(FEE_06_MAP, "FEE", "10.00");
+    ImmutableMap<String, String> customFeeMap =
+        updateSubstitutions(FEE_STD_1_0_MAP, "FEE", "10.00");
     setEppInput("domain_renew_fee.xml", customFeeMap);
     doSuccessfulTest(
         "domain_renew_response_fee.xml",
@@ -433,7 +430,7 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
   }
 
   @Test
-  void testSuccess_anchorTenant_premiumDomain() throws Exception {
+  void testSuccess_anchorTenant_premiumDomain_std_v1() throws Exception {
     persistResource(
         Tld.get("tld")
             .asBuilder()
@@ -441,7 +438,8 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
             .build());
     persistDomain(NONPREMIUM, null);
     setRegistrarIdForFlow("NewRegistrar");
-    ImmutableMap<String, String> customFeeMap = updateSubstitutions(FEE_06_MAP, "FEE", "55.00");
+    ImmutableMap<String, String> customFeeMap =
+        updateSubstitutions(FEE_STD_1_0_MAP, "FEE", "55.00");
     setEppInput("domain_renew_fee.xml", customFeeMap);
     doSuccessfulTest(
         "domain_renew_response_fee.xml",
@@ -455,16 +453,20 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
   }
 
   @Test
-  void testSuccess_customLogicFee() throws Exception {
+  void testSuccess_customLogicFee_std_v1() throws Exception {
     // The "costly-renew" domain has an additional RENEW fee of 100 from custom logic on top of the
     // normal $11 standard renew price for this TLD.
     ImmutableMap<String, String> customFeeMap =
         updateSubstitutions(
-            FEE_06_MAP,
-            "NAME", "costly-renew.tld",
-            "PERIOD", "1",
-            "EX_DATE", "2001-04-03T22:00:00.0Z",
-            "FEE", "111.00");
+            FEE_STD_1_0_MAP,
+            "NAME",
+            "costly-renew.tld",
+            "PERIOD",
+            "1",
+            "EX_DATE",
+            "2001-04-03T22:00:00.0Z",
+            "FEE",
+            "111.00");
     setEppInput("domain_renew_fee.xml", customFeeMap);
     persistDomain();
     doSuccessfulTest(
@@ -477,121 +479,45 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
   }
 
   @Test
-  void testSuccess_fee_v06() throws Exception {
-    setEppInput("domain_renew_fee.xml", FEE_06_MAP);
+  void testSuccess_fee_std_v1() throws Exception {
+    setEppInput("domain_renew_fee.xml", FEE_STD_1_0_MAP);
     persistDomain();
-    doSuccessfulTest("domain_renew_response_fee.xml", 5, FEE_06_MAP);
+    doSuccessfulTest("domain_renew_response_fee.xml", 5, FEE_STD_1_0_MAP);
   }
 
   @Test
-  void testSuccess_fee_v11() throws Exception {
-    setEppInput("domain_renew_fee.xml", FEE_11_MAP);
+  void testSuccess_fee_withDefaultAttributes_std_v1() throws Exception {
+    setEppInput("domain_renew_fee_defaults.xml", FEE_STD_1_0_MAP);
     persistDomain();
-    doSuccessfulTest("domain_renew_response_fee.xml", 5, FEE_11_MAP);
-  }
-
-  @Test
-  void testSuccess_fee_v12() throws Exception {
-    setEppInput("domain_renew_fee.xml", FEE_12_MAP);
-    persistDomain();
-    doSuccessfulTest("domain_renew_response_fee.xml", 5, FEE_12_MAP);
-  }
-
-  @Test
-  void testSuccess_fee_withDefaultAttributes_v06() throws Exception {
-    setEppInput("domain_renew_fee_defaults.xml", FEE_06_MAP);
-    persistDomain();
-    doSuccessfulTest("domain_renew_response_fee.xml", 5, FEE_06_MAP);
-  }
-
-  @Test
-  void testSuccess_fee_withDefaultAttributes_v11() throws Exception {
-    setEppInput("domain_renew_fee_defaults.xml", FEE_11_MAP);
-    persistDomain();
-    doSuccessfulTest("domain_renew_response_fee.xml", 5, FEE_11_MAP);
-  }
-
-  @Test
-  void testSuccess_fee_withDefaultAttributes_v12() throws Exception {
-    setEppInput("domain_renew_fee_defaults.xml", FEE_12_MAP);
-    persistDomain();
-    doSuccessfulTest("domain_renew_response_fee.xml", 5, FEE_12_MAP);
+    doSuccessfulTest("domain_renew_response_fee.xml", 5, FEE_STD_1_0_MAP);
   }
 
   @Test
   void testFailure_fee_unknownCurrency() {
-    setEppInput("domain_renew_fee.xml", updateSubstitutions(FEE_06_MAP, "CURRENCY", "BAD"));
+    setEppInput("domain_renew_fee.xml", updateSubstitutions(FEE_STD_1_0_MAP, "CURRENCY", "BAD"));
     EppException thrown = assertThrows(UnknownCurrencyEppException.class, this::persistDomain);
     assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
-  void testFailure_refundableFee_v06() throws Exception {
-    setEppInput("domain_renew_fee_refundable.xml", FEE_06_MAP);
+  void testFailure_refundableFee_std_v1() throws Exception {
+    setEppInput("domain_renew_fee_refundable.xml", FEE_STD_1_0_MAP);
     persistDomain();
     EppException thrown = assertThrows(UnsupportedFeeAttributeException.class, this::runFlow);
     assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
-  void testFailure_refundableFee_v11() throws Exception {
-    setEppInput("domain_renew_fee_refundable.xml", FEE_11_MAP);
+  void testFailure_gracePeriodFee_std_v1() throws Exception {
+    setEppInput("domain_renew_fee_grace_period.xml", FEE_STD_1_0_MAP);
     persistDomain();
     EppException thrown = assertThrows(UnsupportedFeeAttributeException.class, this::runFlow);
     assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
-  void testFailure_refundableFee_v12() throws Exception {
-    setEppInput("domain_renew_fee_refundable.xml", FEE_12_MAP);
-    persistDomain();
-    EppException thrown = assertThrows(UnsupportedFeeAttributeException.class, this::runFlow);
-    assertAboutEppExceptions().that(thrown).marshalsToXml();
-  }
-
-  @Test
-  void testFailure_gracePeriodFee_v06() throws Exception {
-    setEppInput("domain_renew_fee_grace_period.xml", FEE_06_MAP);
-    persistDomain();
-    EppException thrown = assertThrows(UnsupportedFeeAttributeException.class, this::runFlow);
-    assertAboutEppExceptions().that(thrown).marshalsToXml();
-  }
-
-  @Test
-  void testFailure_gracePeriodFee_v11() throws Exception {
-    setEppInput("domain_renew_fee_grace_period.xml", FEE_11_MAP);
-    persistDomain();
-    EppException thrown = assertThrows(UnsupportedFeeAttributeException.class, this::runFlow);
-    assertAboutEppExceptions().that(thrown).marshalsToXml();
-  }
-
-  @Test
-  void testFailure_gracePeriodFee_v12() throws Exception {
-    setEppInput("domain_renew_fee_grace_period.xml", FEE_12_MAP);
-    persistDomain();
-    EppException thrown = assertThrows(UnsupportedFeeAttributeException.class, this::runFlow);
-    assertAboutEppExceptions().that(thrown).marshalsToXml();
-  }
-
-  @Test
-  void testFailure_appliedFee_v06() throws Exception {
-    setEppInput("domain_renew_fee_applied.xml", FEE_06_MAP);
-    persistDomain();
-    EppException thrown = assertThrows(UnsupportedFeeAttributeException.class, this::runFlow);
-    assertAboutEppExceptions().that(thrown).marshalsToXml();
-  }
-
-  @Test
-  void testFailure_appliedFee_v11() throws Exception {
-    setEppInput("domain_renew_fee_applied.xml", FEE_11_MAP);
-    persistDomain();
-    EppException thrown = assertThrows(UnsupportedFeeAttributeException.class, this::runFlow);
-    assertAboutEppExceptions().that(thrown).marshalsToXml();
-  }
-
-  @Test
-  void testFailure_appliedFee_v12() throws Exception {
-    setEppInput("domain_renew_fee_applied.xml", FEE_12_MAP);
+  void testFailure_appliedFee_std_v1() throws Exception {
+    setEppInput("domain_renew_fee_applied.xml", FEE_STD_1_0_MAP);
     persistDomain();
     EppException thrown = assertThrows(UnsupportedFeeAttributeException.class, this::runFlow);
     assertAboutEppExceptions().that(thrown).marshalsToXml();
@@ -696,7 +622,7 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
         "domain_renew_allocationtoken.xml",
         ImmutableMap.of("DOMAIN", "example.tld", "YEARS", "2", "TOKEN", "abc123"));
     persistDomain();
-    EppException thrown = assertThrows(InvalidAllocationTokenException.class, this::runFlow);
+    EppException thrown = assertThrows(NonexistentAllocationTokenException.class, this::runFlow);
     assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
@@ -713,9 +639,12 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
             .setDomainName("otherdomain.tld")
             .build());
     clock.advanceOneMilli();
-    EppException thrown =
-        assertThrows(AllocationTokenNotValidForDomainException.class, this::runFlow);
-    assertAboutEppExceptions().that(thrown).marshalsToXml();
+    assertAboutEppExceptions()
+        .that(
+            assertThrows(
+                AllocationTokenFlowUtils.AllocationTokenNotValidForDomainException.class,
+                this::runFlow))
+        .marshalsToXml();
     assertAllocationTokenWasNotRedeemed("abc123");
   }
 
@@ -786,9 +715,10 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
                     .put(clock.nowUtc().plusDays(1), TokenStatus.ENDED)
                     .build())
             .build());
-    assertAboutEppExceptions()
-        .that(assertThrows(AllocationTokenNotValidForTldException.class, this::runFlow))
-        .marshalsToXml();
+    runFlowAssertResponse(
+        loadFile(
+            "domain_renew_response.xml",
+            ImmutableMap.of("DOMAIN", "example.tld", "EXDATE", "2002-04-03T22:00:00.0Z")));
     assertAllocationTokenWasNotRedeemed("abc123");
   }
 
@@ -887,7 +817,7 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
         new PollMessage.Autorenew.Builder()
             .setTargetId(getUniqueIdFromCommand())
             .setRegistrarId("TheRegistrar")
-            .setEventTime(reloadResourceByForeignKey().getRegistrationExpirationTime())
+            .setEventTime(reloadResourceByForeignKey().getRegistrationExpirationDateTime())
             .setAutorenewEndTime(END_OF_TIME)
             .setMsg("Domain was auto-renewed.")
             .setHistoryEntry(historyEntryDomainRenew)
@@ -989,8 +919,8 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
   }
 
   @Test
-  void testFailure_wrongFeeAmount_v06() throws Exception {
-    setEppInput("domain_renew_fee.xml", FEE_06_MAP);
+  void testFailure_wrongFeeAmount_std_v1() throws Exception {
+    setEppInput("domain_renew_fee.xml", FEE_STD_1_0_MAP);
     persistResource(
         Tld.get("tld")
             .asBuilder()
@@ -1002,39 +932,14 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
   }
 
   @Test
-  void testFailure_wrongFeeAmount_v11() throws Exception {
-    setEppInput("domain_renew_fee.xml", FEE_11_MAP);
-    persistResource(
-        Tld.get("tld")
-            .asBuilder()
-            .setRenewBillingCostTransitions(ImmutableSortedMap.of(START_OF_TIME, Money.of(USD, 20)))
-            .build());
-    persistDomain();
-    EppException thrown = assertThrows(FeesMismatchException.class, this::runFlow);
-    assertAboutEppExceptions().that(thrown).marshalsToXml();
-  }
-
-  @Test
-  void testFailure_wrongFeeAmount_v12() throws Exception {
-    setEppInput("domain_renew_fee.xml", FEE_12_MAP);
-    persistResource(
-        Tld.get("tld")
-            .asBuilder()
-            .setRenewBillingCostTransitions(ImmutableSortedMap.of(START_OF_TIME, Money.of(USD, 20)))
-            .build());
-    persistDomain();
-    EppException thrown = assertThrows(FeesMismatchException.class, this::runFlow);
-    assertAboutEppExceptions().that(thrown).marshalsToXml();
-  }
-
-  @Test
-  void testFailure_wrongCurrency_v06() throws Exception {
-    setEppInput("domain_renew_fee.xml", FEE_06_MAP);
+  void testFailure_wrongCurrency_std_v1() throws Exception {
+    setEppInput("domain_renew_fee.xml", FEE_STD_1_0_MAP);
     persistResource(
         Tld.get("tld")
             .asBuilder()
             .setCurrency(EUR)
-            .setCreateBillingCost(Money.of(EUR, 13))
+            .setCreateBillingCostTransitions(
+                ImmutableSortedMap.of(START_OF_TIME, Money.of(EUR, 13)))
             .setRestoreBillingCost(Money.of(EUR, 11))
             .setRenewBillingCostTransitions(ImmutableSortedMap.of(START_OF_TIME, Money.of(EUR, 7)))
             .setEapFeeSchedule(ImmutableSortedMap.of(START_OF_TIME, Money.zero(EUR)))
@@ -1047,62 +952,8 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
   }
 
   @Test
-  void testFailure_wrongCurrency_v11() throws Exception {
-    setEppInput("domain_renew_fee.xml", FEE_11_MAP);
-    persistResource(
-        Tld.get("tld")
-            .asBuilder()
-            .setCurrency(EUR)
-            .setCreateBillingCost(Money.of(EUR, 13))
-            .setRestoreBillingCost(Money.of(EUR, 11))
-            .setRenewBillingCostTransitions(ImmutableSortedMap.of(START_OF_TIME, Money.of(EUR, 7)))
-            .setEapFeeSchedule(ImmutableSortedMap.of(START_OF_TIME, Money.zero(EUR)))
-            .setRegistryLockOrUnlockBillingCost(Money.of(EUR, 20))
-            .setServerStatusChangeBillingCost(Money.of(EUR, 19))
-            .build());
-    persistDomain();
-    EppException thrown = assertThrows(CurrencyUnitMismatchException.class, this::runFlow);
-    assertAboutEppExceptions().that(thrown).marshalsToXml();
-  }
-
-  @Test
-  void testFailure_wrongCurrency_v12() throws Exception {
-    setEppInput("domain_renew_fee.xml", FEE_12_MAP);
-    persistResource(
-        Tld.get("tld")
-            .asBuilder()
-            .setCurrency(EUR)
-            .setCreateBillingCost(Money.of(EUR, 13))
-            .setRestoreBillingCost(Money.of(EUR, 11))
-            .setRenewBillingCostTransitions(ImmutableSortedMap.of(START_OF_TIME, Money.of(EUR, 7)))
-            .setEapFeeSchedule(ImmutableSortedMap.of(START_OF_TIME, Money.zero(EUR)))
-            .setRegistryLockOrUnlockBillingCost(Money.of(EUR, 20))
-            .setServerStatusChangeBillingCost(Money.of(EUR, 19))
-            .build());
-    persistDomain();
-    EppException thrown = assertThrows(CurrencyUnitMismatchException.class, this::runFlow);
-    assertAboutEppExceptions().that(thrown).marshalsToXml();
-  }
-
-  @Test
-  void testFailure_feeGivenInWrongScale_v06() throws Exception {
-    setEppInput("domain_renew_fee_bad_scale.xml", FEE_06_MAP);
-    persistDomain();
-    EppException thrown = assertThrows(CurrencyValueScaleException.class, this::runFlow);
-    assertAboutEppExceptions().that(thrown).marshalsToXml();
-  }
-
-  @Test
-  void testFailure_feeGivenInWrongScale_v11() throws Exception {
-    setEppInput("domain_renew_fee_bad_scale.xml", FEE_11_MAP);
-    persistDomain();
-    EppException thrown = assertThrows(CurrencyValueScaleException.class, this::runFlow);
-    assertAboutEppExceptions().that(thrown).marshalsToXml();
-  }
-
-  @Test
-  void testFailure_feeGivenInWrongScale_v12() throws Exception {
-    setEppInput("domain_renew_fee_bad_scale.xml", FEE_12_MAP);
+  void testFailure_feeGivenInWrongScale_std_v1() throws Exception {
+    setEppInput("domain_renew_fee_bad_scale.xml", FEE_STD_1_0_MAP);
     persistDomain();
     EppException thrown = assertThrows(CurrencyValueScaleException.class, this::runFlow);
     assertAboutEppExceptions().that(thrown).marshalsToXml();
@@ -1115,7 +966,8 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
         Tld.get("tld")
             .asBuilder()
             .setCurrency(JPY)
-            .setCreateBillingCost(Money.ofMajor(JPY, 800))
+            .setCreateBillingCostTransitions(
+                ImmutableSortedMap.of(START_OF_TIME, Money.ofMajor(JPY, 800)))
             .setEapFeeSchedule(ImmutableSortedMap.of(START_OF_TIME, Money.ofMajor(JPY, 800)))
             .setRenewBillingCostTransitions(
                 ImmutableSortedMap.of(START_OF_TIME, Money.ofMajor(JPY, 800)))
@@ -1255,33 +1107,47 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
             new AllocationToken.Builder()
                 .setToken("abc123")
                 .setTokenType(BULK_PRICING)
+                .setDiscountFraction(1.0)
                 .setAllowedRegistrarIds(ImmutableSet.of("TheRegistrar"))
                 .setAllowedTlds(ImmutableSet.of("tld"))
                 .setRenewalPriceBehavior(SPECIFIED)
+                .setRenewalPrice(Money.of(USD, 0))
+                .setAllowedEppActions(ImmutableSet.of(CommandName.CREATE))
                 .build());
     persistDomain();
     persistResource(
         reloadResourceByForeignKey().asBuilder().setCurrentBulkToken(token.createVKey()).build());
 
+    persistResource(
+        new AllocationToken.Builder()
+            .setToken("token")
+            .setTokenType(SINGLE_USE)
+            .setAllowedRegistrarIds(ImmutableSet.of("TheRegistrar"))
+            .build());
+
     setEppInput(
         "domain_renew_allocationtoken.xml",
-        ImmutableMap.of("DOMAIN", "example.tld", "YEARS", "2", "TOKEN", "abc123"));
+        ImmutableMap.of("DOMAIN", "example.tld", "YEARS", "2", "TOKEN", "token"));
 
     EppException thrown =
-        assertThrows(MissingRemoveDomainTokenOnBulkPricingDomainException.class, this::runFlow);
+        assertThrows(
+            MissingRemoveBulkPricingTokenOnBulkPricingDomainException.class, this::runFlow);
     assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
-  void testFailsToRenewBulkPricingDomainNoRemoveDomainToken() throws Exception {
+  void testFailsToRenewBulkPricingDomainNoRemoveBulkPricingToken() throws Exception {
     AllocationToken token =
         persistResource(
             new AllocationToken.Builder()
                 .setToken("abc123")
                 .setTokenType(BULK_PRICING)
+                .setDiscountFraction(1.0)
                 .setAllowedRegistrarIds(ImmutableSet.of("TheRegistrar"))
                 .setAllowedTlds(ImmutableSet.of("tld"))
                 .setRenewalPriceBehavior(SPECIFIED)
+                .setRenewalPrice(Money.of(USD, 0))
+                .setAllowedEppActions(ImmutableSet.of(CommandName.CREATE))
                 .build());
     persistDomain();
     persistResource(
@@ -1290,40 +1156,44 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
     setEppInput("domain_renew.xml", ImmutableMap.of("DOMAIN", "example.tld", "YEARS", "5"));
 
     EppException thrown =
-        assertThrows(MissingRemoveDomainTokenOnBulkPricingDomainException.class, this::runFlow);
+        assertThrows(
+            MissingRemoveBulkPricingTokenOnBulkPricingDomainException.class, this::runFlow);
     assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
-  void testFailsToRenewNonBulkPricingDomainWithRemoveDomainToken() throws Exception {
+  void testFailsToRenewNonBulkPricingDomainWithRemoveBulkPricingToken() throws Exception {
     persistDomain();
 
     setEppInput(
         "domain_renew_allocationtoken.xml",
-        ImmutableMap.of("DOMAIN", "example.tld", "YEARS", "2", "TOKEN", "__REMOVEDOMAIN__"));
+        ImmutableMap.of("DOMAIN", "example.tld", "YEARS", "2", "TOKEN", "__REMOVE_BULK_PRICING__"));
 
     EppException thrown =
-        assertThrows(RemoveDomainTokenOnNonBulkPricingDomainException.class, this::runFlow);
+        assertThrows(RemoveBulkPricingTokenOnNonBulkPricingDomainException.class, this::runFlow);
     assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
   @Test
-  void testSuccesfullyAppliesRemoveDomainToken() throws Exception {
+  void testSuccesfullyAppliesRemoveBulkPricingToken() throws Exception {
     AllocationToken token =
         persistResource(
             new AllocationToken.Builder()
                 .setToken("abc123")
                 .setTokenType(BULK_PRICING)
+                .setDiscountFraction(1.0)
                 .setAllowedRegistrarIds(ImmutableSet.of("TheRegistrar"))
                 .setAllowedTlds(ImmutableSet.of("tld"))
                 .setRenewalPriceBehavior(SPECIFIED)
+                .setRenewalPrice(Money.of(USD, 0))
+                .setAllowedEppActions(ImmutableSet.of(CommandName.CREATE))
                 .build());
     persistDomain(SPECIFIED, Money.of(USD, 2));
     persistResource(
         reloadResourceByForeignKey().asBuilder().setCurrentBulkToken(token.createVKey()).build());
     setEppInput(
         "domain_renew_allocationtoken.xml",
-        ImmutableMap.of("DOMAIN", "example.tld", "YEARS", "2", "TOKEN", "__REMOVEDOMAIN__"));
+        ImmutableMap.of("DOMAIN", "example.tld", "YEARS", "2", "TOKEN", "__REMOVE_BULK_PRICING__"));
 
     doSuccessfulTest(
         "domain_renew_response.xml",
@@ -1333,19 +1203,22 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
     // We still need to verify that the bulk token is removed as it's not being tested as a part of
     // doSuccessfulTest
     Domain domain = reloadResourceByForeignKey();
-    Truth8.assertThat(domain.getCurrentBulkToken()).isEmpty();
+    assertThat(domain.getCurrentBulkToken()).isEmpty();
   }
 
   @Test
-  void testDryRunRemoveDomainToken() throws Exception {
+  void testDryRunRemoveBulkPricingToken() throws Exception {
     AllocationToken token =
         persistResource(
             new AllocationToken.Builder()
                 .setToken("abc123")
                 .setTokenType(BULK_PRICING)
+                .setDiscountFraction(1.0)
                 .setAllowedRegistrarIds(ImmutableSet.of("TheRegistrar"))
                 .setAllowedTlds(ImmutableSet.of("tld"))
                 .setRenewalPriceBehavior(SPECIFIED)
+                .setRenewalPrice(Money.of(USD, 0))
+                .setAllowedEppActions(ImmutableSet.of(CommandName.CREATE))
                 .build());
     persistDomain(SPECIFIED, Money.of(USD, 2));
     persistResource(
@@ -1353,7 +1226,7 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
 
     setEppInput(
         "domain_renew_allocationtoken.xml",
-        ImmutableMap.of("DOMAIN", "example.tld", "YEARS", "2", "TOKEN", "__REMOVEDOMAIN__"));
+        ImmutableMap.of("DOMAIN", "example.tld", "YEARS", "2", "TOKEN", "__REMOVE_BULK_PRICING__"));
 
     dryRunFlowAssertResponse(
         loadFile(
@@ -1370,7 +1243,7 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
             new AllocationToken.Builder()
                 .setToken("aaaaa")
                 .setTokenType(DEFAULT_PROMO)
-                .setDiscountFraction(0.5)
+                .setDiscountFraction(0.9)
                 .setDiscountYears(1)
                 .setAllowedTlds(ImmutableSet.of("tld"))
                 .build());
@@ -1398,8 +1271,8 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
     assertThat(billingEvent.getTargetId()).isEqualTo("example.tld");
     assertThat(billingEvent.getAllocationToken().get().getKey())
         .isEqualTo(defaultToken1.getToken());
-    // Price is 50% off the first year only. Non-discounted price is $11.
-    assertThat(billingEvent.getCost()).isEqualTo(Money.of(USD, 16.5));
+    // Price is 90% off the first year only. Non-discounted price is $11.
+    assertThat(billingEvent.getCost()).isEqualTo(Money.of(USD, 12.10));
   }
 
   @Test
@@ -1495,8 +1368,8 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
   }
 
   @Test
-  void testSuccess_doesNotApplyNonPremiumDefaultTokenToPremiumName() throws Exception {
-    ImmutableMap<String, String> customFeeMap = updateSubstitutions(FEE_06_MAP, "FEE", "500");
+  void testSuccess_doesNotApplyNonPremiumDefaultTokenToPremiumName_std_v1() throws Exception {
+    ImmutableMap<String, String> customFeeMap = updateSubstitutions(FEE_STD_1_0_MAP, "FEE", "500");
     setEppInput("domain_renew_fee.xml", customFeeMap);
     persistDomain();
     AllocationToken defaultToken1 =
@@ -1529,9 +1402,9 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
                 "CURRENCY",
                 "USD",
                 "FEE_VERSION",
-                "0.6",
+                "epp:fee-1.0",
                 "FEE_NS",
-                "fee")));
+                "fee1_00")));
     BillingEvent billingEvent =
         Iterables.getOnlyElement(DatabaseHelper.loadAllOf(BillingEvent.class));
     assertThat(billingEvent.getTargetId()).isEqualTo("example.tld");
@@ -1539,7 +1412,7 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
   }
 
   @Test
-  void testSuccess_onlyUsesFirstValidToken() throws Exception {
+  void testSuccess_usesCheapestValidToken() throws Exception {
     setEppInput("domain_renew.xml", ImmutableMap.of("DOMAIN", "example.tld", "YEARS", "2"));
     persistDomain();
     AllocationToken defaultToken1 =
@@ -1586,10 +1459,9 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
     BillingEvent billingEvent =
         Iterables.getOnlyElement(DatabaseHelper.loadAllOf(BillingEvent.class));
     assertThat(billingEvent.getTargetId()).isEqualTo("example.tld");
-    assertThat(billingEvent.getAllocationToken().get().getKey())
-        .isEqualTo(defaultToken2.getToken());
-    // Price is 50% off the first year only. Non-discounted price is $11.
-    assertThat(billingEvent.getCost()).isEqualTo(Money.of(USD, 16.5));
+    assertThat(billingEvent.getAllocationToken().get().getKey()).isEqualTo("ccccc");
+    // Price is 75% off the first year only. Non-discounted price is $11.
+    assertThat(billingEvent.getCost()).isEqualTo(Money.of(USD, 13.75));
   }
 
   @Test
@@ -1635,6 +1507,256 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
   }
 
   @Test
+  void testSuccess_wrongFeeAmountTooHigh_defaultToken_std_v1() throws Exception {
+    setEppInput("domain_renew_fee.xml", FEE_STD_1_0_MAP);
+    persistDomain();
+    AllocationToken defaultToken1 =
+        persistResource(
+            new AllocationToken.Builder()
+                .setToken("aaaaa")
+                .setTokenType(DEFAULT_PROMO)
+                .setDiscountFraction(0.5)
+                .setDiscountYears(1)
+                .setAllowedTlds(ImmutableSet.of("tld"))
+                .build());
+    persistResource(
+        Tld.get("tld")
+            .asBuilder()
+            .setDefaultPromoTokens(ImmutableList.of(defaultToken1.createVKey()))
+            .build());
+    runFlowAssertResponse(
+        loadFile(
+            "domain_renew_response_fee.xml",
+            ImmutableMap.of(
+                "NAME",
+                "example.tld",
+                "PERIOD",
+                "5",
+                "EX_DATE",
+                "2005-04-03T22:00:00.0Z",
+                "FEE",
+                "49.50",
+                "CURRENCY",
+                "USD",
+                "FEE_VERSION",
+                "epp:fee-1.0",
+                "FEE_NS",
+                "fee1_00")));
+  }
+
+  @Test
+  void testFailure_wrongFeeAmountTooLow_defaultToken_std_v1() throws Exception {
+    setEppInput("domain_renew_fee.xml", FEE_STD_1_0_MAP);
+    persistDomain();
+    AllocationToken defaultToken1 =
+        persistResource(
+            new AllocationToken.Builder()
+                .setToken("aaaaa")
+                .setTokenType(DEFAULT_PROMO)
+                .setDiscountFraction(0.5)
+                .setDiscountYears(1)
+                .setAllowedTlds(ImmutableSet.of("tld"))
+                .build());
+    persistResource(
+        Tld.get("tld")
+            .asBuilder()
+            .setDefaultPromoTokens(ImmutableList.of(defaultToken1.createVKey()))
+            .setRenewBillingCostTransitions(ImmutableSortedMap.of(START_OF_TIME, Money.of(USD, 20)))
+            .build());
+    EppException thrown = assertThrows(FeesMismatchException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  void testFailure_wrongFeeAmount_v06() throws Exception {
+    setEppInput("domain_renew_fee.xml", FEE_06_MAP);
+    persistResource(
+        Tld.get("tld")
+            .asBuilder()
+            .setRenewBillingCostTransitions(ImmutableSortedMap.of(START_OF_TIME, Money.of(USD, 20)))
+            .build());
+    persistDomain();
+    EppException thrown = assertThrows(FeesMismatchException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  void testFailure_wrongFeeAmount_v11() throws Exception {
+    setEppInput("domain_renew_fee.xml", FEE_11_MAP);
+    persistResource(
+        Tld.get("tld")
+            .asBuilder()
+            .setRenewBillingCostTransitions(ImmutableSortedMap.of(START_OF_TIME, Money.of(USD, 20)))
+            .build());
+    persistDomain();
+    EppException thrown = assertThrows(FeesMismatchException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  void testFailure_wrongFeeAmount_v12() throws Exception {
+    setEppInput("domain_renew_fee.xml", FEE_12_MAP);
+    persistResource(
+        Tld.get("tld")
+            .asBuilder()
+            .setRenewBillingCostTransitions(ImmutableSortedMap.of(START_OF_TIME, Money.of(USD, 20)))
+            .build());
+    persistDomain();
+    EppException thrown = assertThrows(FeesMismatchException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  void testFailure_wrongCurrency_v06() throws Exception {
+    setEppInput("domain_renew_fee.xml", FEE_06_MAP);
+    persistResource(
+        Tld.get("tld")
+            .asBuilder()
+            .setCurrency(EUR)
+            .setCreateBillingCostTransitions(
+                ImmutableSortedMap.of(START_OF_TIME, Money.of(EUR, 13)))
+            .setRestoreBillingCost(Money.of(EUR, 11))
+            .setRenewBillingCostTransitions(ImmutableSortedMap.of(START_OF_TIME, Money.of(EUR, 7)))
+            .setEapFeeSchedule(ImmutableSortedMap.of(START_OF_TIME, Money.zero(EUR)))
+            .setRegistryLockOrUnlockBillingCost(Money.of(EUR, 20))
+            .setServerStatusChangeBillingCost(Money.of(EUR, 19))
+            .build());
+    persistDomain();
+    EppException thrown = assertThrows(CurrencyUnitMismatchException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  void testFailure_wrongCurrency_v11() throws Exception {
+    setEppInput("domain_renew_fee.xml", FEE_11_MAP);
+    persistResource(
+        Tld.get("tld")
+            .asBuilder()
+            .setCurrency(EUR)
+            .setCreateBillingCostTransitions(
+                ImmutableSortedMap.of(START_OF_TIME, Money.of(EUR, 13)))
+            .setRestoreBillingCost(Money.of(EUR, 11))
+            .setRenewBillingCostTransitions(ImmutableSortedMap.of(START_OF_TIME, Money.of(EUR, 7)))
+            .setEapFeeSchedule(ImmutableSortedMap.of(START_OF_TIME, Money.zero(EUR)))
+            .setRegistryLockOrUnlockBillingCost(Money.of(EUR, 20))
+            .setServerStatusChangeBillingCost(Money.of(EUR, 19))
+            .build());
+    persistDomain();
+    EppException thrown = assertThrows(CurrencyUnitMismatchException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  void testFailure_wrongCurrency_v12() throws Exception {
+    setEppInput("domain_renew_fee.xml", FEE_12_MAP);
+    persistResource(
+        Tld.get("tld")
+            .asBuilder()
+            .setCurrency(EUR)
+            .setCreateBillingCostTransitions(
+                ImmutableSortedMap.of(START_OF_TIME, Money.of(EUR, 13)))
+            .setRestoreBillingCost(Money.of(EUR, 11))
+            .setRenewBillingCostTransitions(ImmutableSortedMap.of(START_OF_TIME, Money.of(EUR, 7)))
+            .setEapFeeSchedule(ImmutableSortedMap.of(START_OF_TIME, Money.zero(EUR)))
+            .setRegistryLockOrUnlockBillingCost(Money.of(EUR, 20))
+            .setServerStatusChangeBillingCost(Money.of(EUR, 19))
+            .build());
+    persistDomain();
+    EppException thrown = assertThrows(CurrencyUnitMismatchException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  void testFailure_feeGivenInWrongScale_v06() throws Exception {
+    setEppInput("domain_renew_fee_bad_scale.xml", FEE_06_MAP);
+    persistDomain();
+    EppException thrown = assertThrows(CurrencyValueScaleException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  void testFailure_feeGivenInWrongScale_v11() throws Exception {
+    setEppInput("domain_renew_fee_bad_scale.xml", FEE_11_MAP);
+    persistDomain();
+    EppException thrown = assertThrows(CurrencyValueScaleException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  void testFailure_feeGivenInWrongScale_v12() throws Exception {
+    setEppInput("domain_renew_fee_bad_scale.xml", FEE_12_MAP);
+    persistDomain();
+    EppException thrown = assertThrows(CurrencyValueScaleException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  void testSuccess_doesNotApplyNonPremiumDefaultTokenToPremiumName_v06() throws Exception {
+    ImmutableMap<String, String> customFeeMap = updateSubstitutions(FEE_06_MAP, "FEE", "500");
+    setEppInput("domain_renew_fee.xml", customFeeMap);
+    persistDomain();
+    AllocationToken defaultToken1 =
+        persistResource(
+            new AllocationToken.Builder()
+                .setToken("aaaaa")
+                .setTokenType(DEFAULT_PROMO)
+                .setDiscountFraction(0.5)
+                .setDiscountYears(1)
+                .setAllowedTlds(ImmutableSet.of("tld"))
+                .build());
+    persistResource(
+        Tld.get("tld")
+            .asBuilder()
+            .setDefaultPromoTokens(ImmutableList.of(defaultToken1.createVKey()))
+            .setPremiumList(persistPremiumList("tld", USD, "example,USD 100"))
+            .build());
+    runFlowAssertResponse(
+        loadFile(
+            "domain_renew_response_fee.xml",
+            ImmutableMap.of(
+                "NAME",
+                "example.tld",
+                "PERIOD",
+                "5",
+                "EX_DATE",
+                "2005-04-03T22:00:00.0Z",
+                "FEE",
+                "500.00",
+                "CURRENCY",
+                "USD",
+                "FEE_VERSION",
+                "fee-0.6",
+                "FEE_NS",
+                "fee")));
+    BillingEvent billingEvent =
+        Iterables.getOnlyElement(DatabaseHelper.loadAllOf(BillingEvent.class));
+    assertThat(billingEvent.getTargetId()).isEqualTo("example.tld");
+    assertThat(billingEvent.getAllocationToken()).isEmpty();
+  }
+
+  @Test
+  void testSuccess_internalRegiration_premiumDomain_v06() throws Exception {
+    persistResource(
+        Tld.get("tld")
+            .asBuilder()
+            .setPremiumList(persistPremiumList("tld", USD, "example,USD 100"))
+            .build());
+    persistDomain(SPECIFIED, Money.of(USD, 2));
+    setRegistrarIdForFlow("NewRegistrar");
+    ImmutableMap<String, String> customFeeMap = updateSubstitutions(FEE_06_MAP, "FEE", "10.00");
+    setEppInput("domain_renew_fee.xml", customFeeMap);
+    doSuccessfulTest(
+        "domain_renew_response_fee.xml",
+        5,
+        "NewRegistrar",
+        UserPrivileges.SUPERUSER,
+        customFeeMap,
+        Money.of(USD, 10),
+        SPECIFIED,
+        Money.of(USD, 2));
+  }
+
+  @Test
   void testSuccess_wrongFeeAmountTooHigh_defaultToken_v06() throws Exception {
     setEppInput("domain_renew_fee.xml", FEE_06_MAP);
     persistDomain();
@@ -1667,7 +1789,7 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
                 "CURRENCY",
                 "USD",
                 "FEE_VERSION",
-                "0.6",
+                "fee-0.6",
                 "FEE_NS",
                 "fee")));
   }
@@ -1728,7 +1850,7 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
                 "CURRENCY",
                 "USD",
                 "FEE_VERSION",
-                "0.11",
+                "fee-0.11",
                 "FEE_NS",
                 "fee")));
   }
@@ -1789,7 +1911,7 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
                 "CURRENCY",
                 "USD",
                 "FEE_VERSION",
-                "0.12",
+                "fee-0.12",
                 "FEE_NS",
                 "fee")));
   }
@@ -1815,5 +1937,167 @@ class DomainRenewFlowTest extends ResourceFlowTestCase<DomainRenewFlow, Domain> 
             .build());
     EppException thrown = assertThrows(FeesMismatchException.class, this::runFlow);
     assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  void testFailure_refundableFee_v06() throws Exception {
+    setEppInput("domain_renew_fee_refundable.xml", FEE_06_MAP);
+    persistDomain();
+    EppException thrown = assertThrows(UnsupportedFeeAttributeException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  void testFailure_refundableFee_v11() throws Exception {
+    setEppInput("domain_renew_fee_refundable.xml", FEE_11_MAP);
+    persistDomain();
+    EppException thrown = assertThrows(UnsupportedFeeAttributeException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  void testFailure_refundableFee_v12() throws Exception {
+    setEppInput("domain_renew_fee_refundable.xml", FEE_12_MAP);
+    persistDomain();
+    EppException thrown = assertThrows(UnsupportedFeeAttributeException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  void testFailure_gracePeriodFee_v06() throws Exception {
+    setEppInput("domain_renew_fee_grace_period.xml", FEE_06_MAP);
+    persistDomain();
+    EppException thrown = assertThrows(UnsupportedFeeAttributeException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  void testFailure_gracePeriodFee_v11() throws Exception {
+    setEppInput("domain_renew_fee_grace_period.xml", FEE_11_MAP);
+    persistDomain();
+    EppException thrown = assertThrows(UnsupportedFeeAttributeException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  void testFailure_gracePeriodFee_v12() throws Exception {
+    setEppInput("domain_renew_fee_grace_period.xml", FEE_12_MAP);
+    persistDomain();
+    EppException thrown = assertThrows(UnsupportedFeeAttributeException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  void testFailure_appliedFee_v06() throws Exception {
+    setEppInput("domain_renew_fee_applied.xml", FEE_06_MAP);
+    persistDomain();
+    EppException thrown = assertThrows(UnsupportedFeeAttributeException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  void testFailure_appliedFee_v11() throws Exception {
+    setEppInput("domain_renew_fee_applied.xml", FEE_11_MAP);
+    persistDomain();
+    EppException thrown = assertThrows(UnsupportedFeeAttributeException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  void testFailure_appliedFee_v12() throws Exception {
+    setEppInput("domain_renew_fee_applied.xml", FEE_12_MAP);
+    persistDomain();
+    EppException thrown = assertThrows(UnsupportedFeeAttributeException.class, this::runFlow);
+    assertAboutEppExceptions().that(thrown).marshalsToXml();
+  }
+
+  @Test
+  void testSuccess_fee_v06() throws Exception {
+    setEppInput("domain_renew_fee.xml", FEE_06_MAP);
+    persistDomain();
+    doSuccessfulTest("domain_renew_response_fee.xml", 5, FEE_06_MAP);
+  }
+
+  @Test
+  void testSuccess_fee_v11() throws Exception {
+    setEppInput("domain_renew_fee.xml", FEE_11_MAP);
+    persistDomain();
+    doSuccessfulTest("domain_renew_response_fee.xml", 5, FEE_11_MAP);
+  }
+
+  @Test
+  void testSuccess_fee_v12() throws Exception {
+    setEppInput("domain_renew_fee.xml", FEE_12_MAP);
+    persistDomain();
+    doSuccessfulTest("domain_renew_response_fee.xml", 5, FEE_12_MAP);
+  }
+
+  @Test
+  void testSuccess_fee_withDefaultAttributes_v06() throws Exception {
+    setEppInput("domain_renew_fee_defaults.xml", FEE_06_MAP);
+    persistDomain();
+    doSuccessfulTest("domain_renew_response_fee.xml", 5, FEE_06_MAP);
+  }
+
+  @Test
+  void testSuccess_fee_withDefaultAttributes_v11() throws Exception {
+    setEppInput("domain_renew_fee_defaults.xml", FEE_11_MAP);
+    persistDomain();
+    doSuccessfulTest("domain_renew_response_fee.xml", 5, FEE_11_MAP);
+  }
+
+  @Test
+  void testSuccess_fee_withDefaultAttributes_v12() throws Exception {
+    setEppInput("domain_renew_fee_defaults.xml", FEE_12_MAP);
+    persistDomain();
+    doSuccessfulTest("domain_renew_response_fee.xml", 5, FEE_12_MAP);
+  }
+
+  @Test
+  void testSuccess_anchorTenant_premiumDomain_v06() throws Exception {
+    persistResource(
+        Tld.get("tld")
+            .asBuilder()
+            .setPremiumList(persistPremiumList("tld", USD, "example,USD 100"))
+            .build());
+    persistDomain(NONPREMIUM, null);
+    setRegistrarIdForFlow("NewRegistrar");
+    ImmutableMap<String, String> customFeeMap = updateSubstitutions(FEE_06_MAP, "FEE", "55.00");
+    setEppInput("domain_renew_fee.xml", customFeeMap);
+    doSuccessfulTest(
+        "domain_renew_response_fee.xml",
+        5,
+        "NewRegistrar",
+        UserPrivileges.SUPERUSER,
+        customFeeMap,
+        Money.of(USD, 55),
+        NONPREMIUM,
+        null);
+  }
+
+  @Test
+  void testSuccess_customLogicFee_v06() throws Exception {
+    // The "costly-renew" domain has an additional RENEW fee of 100 from custom logic on top of the
+    // normal $11 standard renew price for this TLD.
+    ImmutableMap<String, String> customFeeMap =
+        updateSubstitutions(
+            FEE_06_MAP,
+            "NAME",
+            "costly-renew.tld",
+            "PERIOD",
+            "1",
+            "EX_DATE",
+            "2001-04-03T22:00:00.0Z",
+            "FEE",
+            "111.00");
+    setEppInput("domain_renew_fee.xml", customFeeMap);
+    persistDomain();
+    doSuccessfulTest(
+        "domain_renew_response_fee.xml",
+        1,
+        "TheRegistrar",
+        UserPrivileges.NORMAL,
+        customFeeMap,
+        Money.of(USD, 111));
   }
 }

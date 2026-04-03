@@ -33,6 +33,7 @@ public class ProxyConfig {
     QA,
     QA_CANARY,
     ALPHA,
+    ALPHA_CANARY,
     LOCAL,
   }
 
@@ -46,9 +47,7 @@ public class ProxyConfig {
   public Gcs gcs;
   public Kms kms;
   public Epp epp;
-  public Whois whois;
   public HealthCheck healthCheck;
-  public WebWhois webWhois;
   public HttpsRelay httpsRelay;
   public Metrics metrics;
 
@@ -76,16 +75,6 @@ public class ProxyConfig {
     public Quota quota;
   }
 
-  /** Configuration options that apply to WHOIS protocol. */
-  public static class Whois {
-    public int port;
-    public String relayHost;
-    public String relayPath;
-    public int maxMessageLengthBytes;
-    public int readTimeoutSeconds;
-    public Quota quota;
-  }
-
   /** Configuration options that apply to GCP load balancer health check protocol. */
   public static class HealthCheck {
     public int port;
@@ -93,16 +82,10 @@ public class ProxyConfig {
     public String checkResponse;
   }
 
-  /** Configuration options that apply to web WHOIS redirects. */
-  public static class WebWhois {
-    public int httpPort;
-    public int httpsPort;
-    public String redirectHost;
-  }
-
   /** Configuration options that apply to HTTPS relay protocol. */
   public static class HttpsRelay {
     public int port;
+    public int localPort;
     public int maxMessageLengthBytes;
   }
 
@@ -111,6 +94,8 @@ public class ProxyConfig {
     public int stackdriverMaxQps;
     public int stackdriverMaxPointsPerRequest;
     public int writeIntervalSeconds;
+    public double frontendMetricsRatio;
+    public double backendMetricsRatio;
   }
 
   /** Configuration options that apply to quota management. */

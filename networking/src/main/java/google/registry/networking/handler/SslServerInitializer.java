@@ -54,8 +54,8 @@ import javax.net.ssl.SSLSession;
  * <p>The ssl handler added can require client authentication, but it uses an {@link
  * InsecureTrustManagerFactory}, which accepts any ssl certificate presented by the client, as long
  * as the client uses the corresponding private key to establish SSL handshake. The client
- * certificate hash will be passed along to GAE as an HTTP header for verification (not handled by
- * this handler).
+ * certificate hash will be passed along to the service as an HTTP header for verification (not
+ * handled by this handler).
  */
 @Sharable
 public class SslServerInitializer<C extends Channel> extends ChannelInitializer<C> {
@@ -70,10 +70,10 @@ public class SslServerInitializer<C extends Channel> extends ChannelInitializer<
   /**
    * The list of cipher suites that are currently acceptable to create a successful handshake.
    *
-   * <p>This list includes all of the current TLS1.3 ciphers and a collection of TLS1.2 ciphers with
-   * no known security vulnerabilities. Note that OpenSSL uses a separate nomenclature for the
-   * ciphers internally but the IANA names listed here will be transparently translated by the
-   * OpenSSL provider (if used), so there is no need to include the OpenSSL name variants here. More
+   * <p>This list includes all the current TLS1.3 ciphers and a collection of TLS1.2 ciphers with no
+   * known security vulnerabilities. Note that OpenSSL uses a separate nomenclature for the ciphers
+   * internally but the IANA names listed here will be transparently translated by the OpenSSL
+   * provider (if used), so there is no need to include the OpenSSL name variants here. More
    * information about these cipher suites and their OpenSSL names can be found at ciphersuite.info.
    */
   private static final ImmutableList<String> ALLOWED_TLS_CIPHERS =
@@ -90,6 +90,10 @@ public class SslServerInitializer<C extends Channel> extends ChannelInitializer<
           "TLS_AES_128_CCM_SHA256",
           "TLS_AES_128_CCM_8_SHA256");
 
+  /** Thankfully, the JDK supports TLS version 1.3 now. */
+  private static final ImmutableList<String> SUPPORTED_TLS_VERSIONS =
+      ImmutableList.of("TLSv1.3", "TLSv1.2");
+
   private static final FluentLogger logger = FluentLogger.forEnclosingClass();
   private final boolean requireClientCert;
   // TODO(jianglai): Always validate client certs (if required).
@@ -99,7 +103,6 @@ public class SslServerInitializer<C extends Channel> extends ChannelInitializer<
   // change when the artifacts on GCS changes.
   private final Supplier<PrivateKey> privateKeySupplier;
   private final Supplier<ImmutableList<X509Certificate>> certificatesSupplier;
-  private final ImmutableList<String> supportedSslVersions;
 
   public SslServerInitializer(
       boolean requireClientCert,
@@ -116,12 +119,6 @@ public class SslServerInitializer<C extends Channel> extends ChannelInitializer<
     this.sslProvider = sslProvider;
     this.privateKeySupplier = privateKeySupplier;
     this.certificatesSupplier = certificatesSupplier;
-    this.supportedSslVersions =
-        sslProvider == SslProvider.OPENSSL
-            ? ImmutableList.of("TLSv1.3", "TLSv1.2")
-            // JDK support for TLS 1.3 won't be available until 2021-04-20 at the earliest.
-            // See: https://java.com/en/jre-jdk-cryptoroadmap.html
-            : ImmutableList.of("TLSv1.2");
   }
 
   @Override
@@ -133,12 +130,14 @@ public class SslServerInitializer<C extends Channel> extends ChannelInitializer<
             .sslProvider(sslProvider)
             .trustManager(InsecureTrustManagerFactory.INSTANCE)
             .clientAuth(requireClientCert ? ClientAuth.REQUIRE : ClientAuth.NONE)
-            .protocols(supportedSslVersions)
+            .protocols(SUPPORTED_TLS_VERSIONS)
             .ciphers(ALLOWED_TLS_CIPHERS, SupportedCipherSuiteFilter.INSTANCE)
             .build();
 
     logger.atInfo().log("Available Cipher Suites: %s", sslContext.cipherSuites());
     SslHandler sslHandler = sslContext.newHandler(channel.alloc());
+    sslHandler.setHandshakeTimeoutMillis(20000);
+
     if (requireClientCert) {
       Promise<X509Certificate> clientCertificatePromise = channel.eventLoop().newPromise();
       Future<Channel> unusedFuture =
@@ -158,14 +157,16 @@ public class SslServerInitializer<C extends Channel> extends ChannelInitializer<
                             ((RSAPublicKey) clientPublicKey).getModulus().bitLength();
                       }
                       logger.atInfo().log(
-                          "--SSL Information--\n"
-                              + "Client Certificate Hash: %s\n"
-                              + "SSL Protocol: %s\n"
-                              + "Cipher Suite: %s\n"
-                              + "Not Before: %s\n"
-                              + "Not After: %s\n"
-                              + "Client Certificate Type: %s\n"
-                              + "Client Certificate Length: %s\n",
+                          """
+                          --SSL Information--
+                          Client Certificate Hash: %s
+                          SSL Protocol: %s
+                          Cipher Suite: %s
+                          Not Before: %s
+                          Not After: %s
+                          Client Certificate Type: %s
+                          Client Certificate Length: %s
+                          """,
                           getCertificateHash(clientCertificate),
                           sslSession.getProtocol(),
                           sslSession.getCipherSuite(),

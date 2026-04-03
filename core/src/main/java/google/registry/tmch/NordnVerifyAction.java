@@ -15,9 +15,9 @@
 package google.registry.tmch;
 
 import static google.registry.request.UrlConnectionUtils.getResponseBytes;
+import static jakarta.servlet.http.HttpServletResponse.SC_NO_CONTENT;
+import static jakarta.servlet.http.HttpServletResponse.SC_OK;
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static javax.servlet.http.HttpServletResponse.SC_NO_CONTENT;
-import static javax.servlet.http.HttpServletResponse.SC_OK;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.flogger.FluentLogger;
@@ -30,12 +30,12 @@ import google.registry.request.Response;
 import google.registry.request.UrlConnectionService;
 import google.registry.request.auth.Auth;
 import google.registry.util.UrlConnectionException;
+import jakarta.inject.Inject;
 import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.security.GeneralSecurityException;
 import java.util.Map.Entry;
-import javax.inject.Inject;
 
 /**
  * NORDN CSV uploading system, verify operation.
@@ -54,7 +54,7 @@ import javax.inject.Inject;
     path = NordnVerifyAction.PATH,
     method = Action.Method.POST,
     automaticallyPrintOk = true,
-    auth = Auth.AUTH_API_ADMIN)
+    auth = Auth.AUTH_ADMIN)
 public final class NordnVerifyAction implements Runnable {
 
   static final String PATH = "/_dr/task/nordnVerify";
@@ -112,7 +112,7 @@ public final class NordnVerifyAction implements Runnable {
       logger.atInfo().log(
           "LORDN verify task %s response: HTTP response code %d", actionLogId, responseCode);
       if (responseCode == SC_NO_CONTENT) {
-        // Send a 400+ status code so App Engine will retry the task.
+        // Send a 400+ status code so Cloud Tasks will retry the task.
         throw new ConflictException("Not ready");
       }
       if (responseCode != SC_OK) {
@@ -148,6 +148,8 @@ public final class NordnVerifyAction implements Runnable {
       return log;
     } catch (IOException e) {
       throw new IOException(String.format("Error connecting to MarksDB at URL %s", url), e);
+    } finally {
+      connection.disconnect();
     }
   }
 }

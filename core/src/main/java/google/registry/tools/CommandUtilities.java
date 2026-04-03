@@ -17,10 +17,8 @@ package google.registry.tools;
 import static com.google.common.base.Preconditions.checkState;
 
 import com.google.common.base.Ascii;
-import com.google.common.base.Strings;
 import google.registry.model.EppResource;
 import google.registry.model.ForeignKeyUtils;
-import google.registry.model.contact.Contact;
 import google.registry.model.domain.Domain;
 import google.registry.model.host.Host;
 import google.registry.persistence.VKey;
@@ -31,7 +29,6 @@ class CommandUtilities {
 
   /** A useful parameter enum for commands that operate on {@link EppResource} objects. */
   public enum ResourceType {
-    CONTACT(Contact.class),
     HOST(Host.class),
     DOMAIN(Domain.class);
 
@@ -42,12 +39,15 @@ class CommandUtilities {
     }
 
     public VKey<? extends EppResource> getKey(String uniqueId, DateTime now) {
-      return ForeignKeyUtils.load(clazz, uniqueId, now);
+      return ForeignKeyUtils.loadKey(clazz, uniqueId, now)
+          .orElseThrow(
+              () ->
+                  new IllegalArgumentException(String.format("Invalid resource ID %s", uniqueId)));
     }
   }
 
   static String addHeader(String header, String body) {
-    return String.format("%s:\n%s\n%s", header, Strings.repeat("-", header.length() + 1), body);
+    return String.format("%s:\n%s\n%s", header, "-".repeat(header.length() + 1), body);
   }
 
   /** Prompts for yes/no input using promptText, defaulting to no. */

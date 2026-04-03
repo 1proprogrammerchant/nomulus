@@ -24,18 +24,18 @@ import google.registry.model.tld.label.PremiumList;
 import google.registry.model.tld.label.PremiumListDao;
 import google.registry.request.Action;
 import google.registry.request.auth.Auth;
+import jakarta.inject.Inject;
 import java.util.Comparator;
 import java.util.Optional;
-import javax.inject.Inject;
 
 /**
  * An action that lists premium lists, for use by the {@code nomulus list_premium_lists} command.
  */
 @Action(
-    service = Action.Service.TOOLS,
+    service = Action.Service.BACKEND,
     path = ListPremiumListsAction.PATH,
     method = {GET, POST},
-    auth = Auth.AUTH_API_ADMIN)
+    auth = Auth.AUTH_ADMIN)
 public final class ListPremiumListsAction extends ListObjectsAction<PremiumList> {
 
   public static final String PATH = "/_dr/admin/list/premiumLists";
@@ -54,8 +54,7 @@ public final class ListPremiumListsAction extends ListObjectsAction<PremiumList>
                 tm().loadAllOf(PremiumList.class).stream()
                     .map(PremiumList::getName)
                     .map(PremiumListDao::getLatestRevision)
-                    .filter(Optional::isPresent)
-                    .map(Optional::get)
+                    .flatMap(Optional::stream)
                     .collect(toImmutableSortedSet(Comparator.comparing(PremiumList::getName))));
   }
 }

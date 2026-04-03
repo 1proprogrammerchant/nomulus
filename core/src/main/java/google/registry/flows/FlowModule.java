@@ -15,13 +15,13 @@
 package google.registry.flows;
 
 import static com.google.common.base.Preconditions.checkState;
+import static google.registry.persistence.transaction.TransactionManagerFactory.replicaTm;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
 
 import com.google.common.base.Strings;
 import dagger.Module;
 import dagger.Provides;
 import google.registry.flows.picker.FlowPicker;
-import google.registry.model.contact.ContactHistory;
 import google.registry.model.domain.DomainHistory;
 import google.registry.model.domain.metadata.MetadataExtension;
 import google.registry.model.eppcommon.AuthInfo;
@@ -37,9 +37,10 @@ import google.registry.model.host.HostHistory;
 import google.registry.model.reporting.HistoryEntry;
 import google.registry.persistence.IsolationLevel;
 import google.registry.persistence.PersistenceModule.TransactionIsolationLevel;
+import google.registry.persistence.transaction.JpaTransactionManager;
+import jakarta.inject.Qualifier;
 import java.lang.annotation.Documented;
 import java.util.Optional;
-import javax.inject.Qualifier;
 
 /** Module to choose and instantiate an EPP flow. */
 @Module
@@ -147,6 +148,13 @@ public class FlowModule {
 
   @Provides
   @FlowScope
+  @LogSqlStatements
+  boolean provideShouldLogSqlStatements(Class<? extends Flow> flowClass) {
+    return SqlStatementLoggingFlow.class.isAssignableFrom(flowClass);
+  }
+
+  @Provides
+  @FlowScope
   @Superuser
   boolean provideIsSuperuser() {
     return isSuperuser;
@@ -188,6 +196,16 @@ public class FlowModule {
       return FlowPicker.getFlowClass(eppInput);
     } catch (EppException e) {
       throw new EppExceptionInProviderException(e);
+    }
+  }
+
+  @Provides
+  @FlowScope
+  static JpaTransactionManager provideJpaTm(Class<? extends Flow> flowClass) {
+    if (MutatingFlow.class.isAssignableFrom(flowClass)) {
+      return tm();
+    } else {
+      return replicaTm();
     }
   }
 
@@ -249,23 +267,6 @@ public class FlowModule {
   }
 
   /**
-   * Provides a partially filled in {@link ContactHistory.Builder}
-   *
-   * <p>This is not marked with {@link FlowScope} so that each retry gets a fresh one. Otherwise,
-   * the fact that the builder is one-use would cause NPEs.
-   */
-  @Provides
-  static ContactHistory.Builder provideContactHistoryBuilder(
-      Trid trid,
-      @InputXml byte[] inputXmlBytes,
-      @Superuser boolean isSuperuser,
-      @RegistrarId String registrarId,
-      EppInput eppInput) {
-    return makeHistoryEntryBuilder(
-        new ContactHistory.Builder(), trid, inputXmlBytes, isSuperuser, registrarId, eppInput);
-  }
-
-  /**
    * Provides a partially filled in {@link HostHistory.Builder}
    *
    * <p>This is not marked with {@link FlowScope} so that each retry gets a fresh one. Otherwise,
@@ -314,7 +315,7 @@ public class FlowModule {
 
   @Provides
   static FlowMetadata provideFlowMetadata(@Superuser boolean isSuperuser) {
-    return FlowMetadata.newBuilder().setSuperuser(isSuperuser).build();
+    return FlowMetadata.newBuilder().setIsSuperuser(isSuperuser).build();
   }
 
   /** Wrapper class to carry an {@link EppException} to the calling code. */
@@ -358,4 +359,9 @@ public class FlowModule {
   @Qualifier
   @Documented
   public @interface Transactional {}
+
+  /** Dagger qualifier for if we should log all SQL statements in a flow. */
+  @Qualifier
+  @Documented
+  public @interface LogSqlStatements {}
 }

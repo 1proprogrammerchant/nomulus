@@ -14,13 +14,13 @@
 
 package google.registry.request;
 
+import jakarta.inject.Qualifier;
 import java.lang.annotation.Documented;
-import javax.inject.Qualifier;
 
 /**
  * Dagger qualifier for the HTTP request path.
  *
- * @see javax.servlet.http.HttpServletRequest#getRequestURI()
+ * @see jakarta.servlet.http.HttpServletRequest#getRequestURI()
  */
 @Qualifier
 @Documented

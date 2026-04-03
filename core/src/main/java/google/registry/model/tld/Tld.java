@@ -16,9 +16,10 @@ package google.registry.model.tld;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
-import static com.google.common.collect.Maps.toMap;
 import static google.registry.config.RegistryConfig.getSingletonCacheRefreshDuration;
+import static google.registry.model.EntityYamlUtils.createObjectMapper;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
 import static google.registry.util.CollectionUtils.nullToEmptyImmutableCopy;
 import static google.registry.util.DateTimeUtils.END_OF_TIME;
@@ -28,6 +29,8 @@ import static org.joda.money.CurrencyUnit.USD;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.github.benmanes.caffeine.cache.CacheLoader;
@@ -50,6 +53,8 @@ import google.registry.model.EntityYamlUtils.CurrencyDeserializer;
 import google.registry.model.EntityYamlUtils.CurrencySerializer;
 import google.registry.model.EntityYamlUtils.OptionalDurationSerializer;
 import google.registry.model.EntityYamlUtils.OptionalStringSerializer;
+import google.registry.model.EntityYamlUtils.SortedEnumSetSerializer;
+import google.registry.model.EntityYamlUtils.SortedSetSerializer;
 import google.registry.model.EntityYamlUtils.TimedTransitionPropertyMoneyDeserializer;
 import google.registry.model.EntityYamlUtils.TimedTransitionPropertyTldStateDeserializer;
 import google.registry.model.EntityYamlUtils.TokenVKeyListDeserializer;
@@ -61,12 +66,23 @@ import google.registry.model.domain.fee.BaseFee.FeeType;
 import google.registry.model.domain.fee.Fee;
 import google.registry.model.domain.token.AllocationToken;
 import google.registry.model.domain.token.AllocationToken.TokenType;
+import google.registry.model.domain.token.VKeyConverter_AllocationToken;
 import google.registry.model.tld.label.PremiumList;
 import google.registry.model.tld.label.ReservedList;
+import google.registry.persistence.EntityCallbacksListener.RecursivePostPersist;
 import google.registry.persistence.VKey;
-import google.registry.persistence.converter.JodaMoneyType;
+import google.registry.persistence.converter.AllocationTokenVkeyListUserType;
+import google.registry.persistence.converter.BillingCostTransitionUserType;
+import google.registry.persistence.converter.TldStateTransitionUserType;
 import google.registry.tldconfig.idn.IdnTableEnum;
 import google.registry.util.Idn;
+import jakarta.persistence.AttributeOverride;
+import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.Id;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -75,13 +91,6 @@ import java.util.function.Predicate;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.EnumType;
-import javax.persistence.Enumerated;
-import javax.persistence.Id;
-import javax.persistence.PostPersist;
-import org.hibernate.annotations.Columns;
 import org.hibernate.annotations.Type;
 import org.joda.money.CurrencyUnit;
 import org.joda.money.Money;
@@ -100,7 +109,7 @@ public class Tld extends ImmutableObject implements Buildable, UnsafeSerializabl
   @Column(name = "tld_name", nullable = false)
   String tldStr;
 
-  /** The suffix that identifies roids as belonging to this specific tld, e.g. -HOW for .how. */
+  /** The suffix that identifies roids as belonging to this specific tld, e.g., -HOW for .how. */
   String roidSuffix;
 
   /** Default values for all the relevant TLD parameters. */
@@ -123,6 +132,20 @@ public class Tld extends ImmutableObject implements Buildable, UnsafeSerializabl
   public static final Money DEFAULT_RESTORE_BILLING_COST = Money.of(USD, 100);
   public static final Money DEFAULT_SERVER_STATUS_CHANGE_BILLING_COST = Money.of(USD, 20);
   public static final Money DEFAULT_REGISTRY_LOCK_OR_UNLOCK_BILLING_COST = Money.of(USD, 0);
+
+  public boolean equalYaml(Tld tldToCompare) {
+    if (this.equals(tldToCompare)) {
+      return true;
+    }
+    ObjectMapper mapper = createObjectMapper();
+    try {
+      String thisYaml = mapper.writeValueAsString(this);
+      String otherYaml = mapper.writeValueAsString(tldToCompare);
+      return thisYaml.equals(otherYaml);
+    } catch (JsonProcessingException e) {
+      throw new RuntimeException(e);
+    }
+  }
 
   /** The type of TLD, which determines things like backups and escrow policy. */
   public enum TldType {
@@ -173,26 +196,21 @@ public class Tld extends ImmutableObject implements Buildable, UnsafeSerializabl
 
   /** Returns the TLD for a given TLD, throwing if none exists. */
   public static Tld get(String tld) {
-    Tld maybeTld = CACHE.get(tld);
-    if (maybeTld == null) {
-      throw new TldNotFoundException(tld);
-    } else {
-      return maybeTld;
-    }
+    return CACHE.get(tld).orElseThrow(() -> new TldNotFoundException(tld));
   }
 
   /** Returns the TLD entities for the given TLD strings, throwing if any don't exist. */
   public static ImmutableSet<Tld> get(Set<String> tlds) {
-    Map<String, Tld> registries = CACHE.getAll(tlds);
-    ImmutableSet<String> missingRegistries =
-        registries.entrySet().stream()
-            .filter(e -> e.getValue() == null)
+    Map<String, Optional<Tld>> tldObjects = CACHE.getAll(tlds);
+    ImmutableSet<String> missingTlds =
+        tldObjects.entrySet().stream()
+            .filter(e -> e.getValue().isEmpty())
             .map(Map.Entry::getKey)
             .collect(toImmutableSet());
-    if (missingRegistries.isEmpty()) {
-      return registries.values().stream().collect(toImmutableSet());
+    if (missingTlds.isEmpty()) {
+      return tldObjects.values().stream().map(Optional::get).collect(toImmutableSet());
     } else {
-      throw new TldNotFoundException(missingRegistries);
+      throw new TldNotFoundException(missingTlds);
     }
   }
 
@@ -202,28 +220,30 @@ public class Tld extends ImmutableObject implements Buildable, UnsafeSerializabl
    * <p>This is called automatically when the tld is saved. One should also call it when a tld is
    * deleted.
    */
-  @PostPersist
+  @RecursivePostPersist
   public void invalidateInCache() {
     CACHE.invalidate(tldStr);
   }
 
   /** A cache that loads the {@link Tld} for a given tld. */
-  private static final LoadingCache<String, Tld> CACHE =
+  private static final LoadingCache<String, Optional<Tld>> CACHE =
       CacheUtils.newCacheBuilder(getSingletonCacheRefreshDuration())
           .build(
-              new CacheLoader<String, Tld>() {
+              new CacheLoader<>() {
                 @Override
-                public Tld load(final String tld) {
-                  return tm().transact(() -> tm().loadByKeyIfPresent(createVKey(tld))).orElse(null);
+                public Optional<Tld> load(final String tld) {
+                  return tm().reTransact(() -> tm().loadByKeyIfPresent(createVKey(tld)));
                 }
 
                 @Override
-                public Map<String, Tld> loadAll(Iterable<? extends String> tlds) {
+                public Map<? extends String, ? extends Optional<Tld>> loadAll(
+                    Set<? extends String> tlds) {
                   ImmutableMap<String, VKey<Tld>> keysMap =
-                      toMap(ImmutableSet.copyOf(tlds), Tld::createVKey);
+                      tlds.stream().collect(toImmutableMap(tld -> tld, Tld::createVKey));
                   Map<VKey<? extends Tld>, Tld> entities =
-                      tm().transact(() -> tm().loadByKeysIfPresent(keysMap.values()));
-                  return Maps.transformEntries(keysMap, (k, v) -> entities.getOrDefault(v, null));
+                      tm().reTransact(() -> tm().loadByKeysIfPresent(keysMap.values()));
+                  return Maps.toMap(
+                      tlds, tld -> Optional.ofNullable(entities.get(createVKey(tld))));
                 }
               });
 
@@ -234,6 +254,11 @@ public class Tld extends ImmutableObject implements Buildable, UnsafeSerializabl
   @Override
   public VKey<Tld> createVKey() {
     return VKey.create(Tld.class, tldStr);
+  }
+
+  /** Checks if {@code tld} is enrolled with BSA. */
+  public static boolean isEnrolledWithBsa(Tld tld, DateTime now) {
+    return tld.getBsaEnrollStartTime().orElse(END_OF_TIME).isBefore(now);
   }
 
   /**
@@ -255,6 +280,7 @@ public class Tld extends ImmutableObject implements Buildable, UnsafeSerializabl
    * <p>All entries of this list must be valid keys for the map of {@code DnsWriter}s injected by
    * {@code @Inject Map<String, DnsWriter>}
    */
+  @JsonSerialize(using = SortedSetSerializer.class)
   @Column(nullable = false)
   Set<String> dnsWriters;
 
@@ -270,7 +296,7 @@ public class Tld extends ImmutableObject implements Buildable, UnsafeSerializabl
    * this procedure to change this value:
    *
    * <ol>
-   *   <li>Pause the DNS queue via {@link google.registry.tools.UpdateTldCommand}
+   *   <li>Pause the DNS queue via {@link google.registry.tools.ConfigureTldCommand}
    *   <li>Change this number
    *   <li>Let the Tld caches expire (currently 5 minutes) and drain the DNS publish queue
    *   <li>Unpause the DNS queue
@@ -294,6 +320,7 @@ public class Tld extends ImmutableObject implements Buildable, UnsafeSerializabl
    *
    * <p>When this field is null, the "dnsDefaultATtl" value from the config file will be used.
    */
+  @Column(columnDefinition = "interval")
   @JsonSerialize(using = OptionalDurationSerializer.class)
   Duration dnsAPlusAaaaTtl;
 
@@ -302,6 +329,7 @@ public class Tld extends ImmutableObject implements Buildable, UnsafeSerializabl
    *
    * <p>When this field is null, the "dnsDefaultNsTtl" value from the config file will be used.
    */
+  @Column(columnDefinition = "interval")
   @JsonSerialize(using = OptionalDurationSerializer.class)
   Duration dnsNsTtl;
 
@@ -310,8 +338,10 @@ public class Tld extends ImmutableObject implements Buildable, UnsafeSerializabl
    *
    * <p>When this field is null, the "dnsDefaultDsTtl" value from the config file will be used.
    */
+  @Column(columnDefinition = "interval")
   @JsonSerialize(using = OptionalDurationSerializer.class)
   Duration dnsDsTtl;
+
   /**
    * The unicode-aware representation of the TLD associated with this {@link Tld}.
    *
@@ -343,7 +373,8 @@ public class Tld extends ImmutableObject implements Buildable, UnsafeSerializabl
   boolean invoicingEnabled;
 
   /** A property that transitions to different {@link TldState}s at different times. */
-  @Column(nullable = false)
+  @Column(nullable = false, columnDefinition = "hstore")
+  @Type(TldStateTransitionUserType.class)
   @JsonDeserialize(using = TimedTransitionPropertyTldStateDeserializer.class)
   TimedTransitionProperty<TldState> tldStateTransitions =
       TimedTransitionProperty.withInitialValue(DEFAULT_TLD_STATE);
@@ -354,6 +385,7 @@ public class Tld extends ImmutableObject implements Buildable, UnsafeSerializabl
   CreateAutoTimestamp creationTime = CreateAutoTimestamp.create(null);
 
   /** The set of reserved list names that are applicable to this tld. */
+  @JsonSerialize(using = SortedSetSerializer.class)
   @Column(name = "reserved_list_names")
   Set<String> reservedListNames;
 
@@ -394,35 +426,35 @@ public class Tld extends ImmutableObject implements Buildable, UnsafeSerializabl
    * <p>Domain deletes are free and effective immediately so long as they take place within this
    * amount of time following creation.
    */
-  @Column(nullable = false)
+  @Column(nullable = false, columnDefinition = "interval")
   Duration addGracePeriodLength = DEFAULT_ADD_GRACE_PERIOD;
 
   /** The length of the anchor tenant add grace period for this TLD. */
-  @Column(nullable = false)
+  @Column(nullable = false, columnDefinition = "interval")
   Duration anchorTenantAddGracePeriodLength = DEFAULT_ANCHOR_TENANT_ADD_GRACE_PERIOD;
 
   /** The length of the autorenew grace period for this TLD. */
-  @Column(nullable = false)
+  @Column(nullable = false, columnDefinition = "interval")
   Duration autoRenewGracePeriodLength = DEFAULT_AUTO_RENEW_GRACE_PERIOD;
 
   /** The length of the redemption grace period for this TLD. */
-  @Column(nullable = false)
+  @Column(nullable = false, columnDefinition = "interval")
   Duration redemptionGracePeriodLength = DEFAULT_REDEMPTION_GRACE_PERIOD;
 
   /** The length of the renew grace period for this TLD. */
-  @Column(nullable = false)
+  @Column(nullable = false, columnDefinition = "interval")
   Duration renewGracePeriodLength = DEFAULT_RENEW_GRACE_PERIOD;
 
   /** The length of the transfer grace period for this TLD. */
-  @Column(nullable = false)
+  @Column(nullable = false, columnDefinition = "interval")
   Duration transferGracePeriodLength = DEFAULT_TRANSFER_GRACE_PERIOD;
 
   /** The length of time before a transfer is automatically approved for this TLD. */
-  @Column(nullable = false)
+  @Column(nullable = false, columnDefinition = "interval")
   Duration automaticTransferLength = DEFAULT_AUTOMATIC_TRANSFER_LENGTH;
 
   /** The length of time a domain spends in the non-redeemable pending delete phase for this TLD. */
-  @Column(nullable = false)
+  @Column(nullable = false, columnDefinition = "interval")
   Duration pendingDeleteLength = DEFAULT_PENDING_DELETE_LENGTH;
 
   /** The currency unit for all costs associated with this TLD. */
@@ -431,40 +463,40 @@ public class Tld extends ImmutableObject implements Buildable, UnsafeSerializabl
   @JsonDeserialize(using = CurrencyDeserializer.class)
   CurrencyUnit currency = DEFAULT_CURRENCY;
 
-  /** The per-year billing cost for registering a new domain name. */
-  @Type(type = JodaMoneyType.TYPE_NAME)
-  @Columns(
-      columns = {
-        @Column(name = "create_billing_cost_amount"),
-        @Column(name = "create_billing_cost_currency")
-      })
-  Money createBillingCost = DEFAULT_CREATE_BILLING_COST;
+  /** A property that transitions to different create billing costs at different times. */
+  @Column(nullable = false, columnDefinition = "hstore")
+  @Type(BillingCostTransitionUserType.class)
+  @JsonDeserialize(using = TimedTransitionPropertyMoneyDeserializer.class)
+  TimedTransitionProperty<Money> createBillingCostTransitions =
+      TimedTransitionProperty.withInitialValue(DEFAULT_CREATE_BILLING_COST);
 
   /** The one-time billing cost for restoring a domain name from the redemption grace period. */
-  @Type(type = JodaMoneyType.TYPE_NAME)
-  @Columns(
-      columns = {
-        @Column(name = "restore_billing_cost_amount"),
-        @Column(name = "restore_billing_cost_currency")
-      })
+  @AttributeOverride(
+      name = "amount",
+      // Override Hibernate default (numeric(38,2)) to match real schema definition (numeric(19,2)).
+      column = @Column(name = "restore_billing_cost_amount", precision = 19, scale = 2))
+  @AttributeOverride(name = "currency", column = @Column(name = "restore_billing_cost_currency"))
   Money restoreBillingCost = DEFAULT_RESTORE_BILLING_COST;
 
   /** The one-time billing cost for changing the server status (i.e. lock). */
-  @Type(type = JodaMoneyType.TYPE_NAME)
-  @Columns(
-      columns = {
-        @Column(name = "server_status_change_billing_cost_amount"),
-        @Column(name = "server_status_change_billing_cost_currency")
-      })
+  @AttributeOverride(
+      name = "amount",
+      // Override Hibernate default (numeric(38,2)) to match real schema definition (numeric(19,2)).
+      column =
+          @Column(name = "server_status_change_billing_cost_amount", precision = 19, scale = 2))
+  @AttributeOverride(
+      name = "currency",
+      column = @Column(name = "server_status_change_billing_cost_currency"))
   Money serverStatusChangeBillingCost = DEFAULT_SERVER_STATUS_CHANGE_BILLING_COST;
 
   /** The one-time billing cost for a registry lock/unlock action initiated by a registrar. */
-  @Type(type = JodaMoneyType.TYPE_NAME)
-  @Columns(
-      columns = {
-        @Column(name = "registry_lock_or_unlock_cost_amount"),
-        @Column(name = "registry_lock_or_unlock_cost_currency")
-      })
+  @AttributeOverride(
+      name = "amount",
+      // Override Hibernate default (numeric(38,2)) to match real schema definition (numeric(19,2)).
+      column = @Column(name = "registry_lock_or_unlock_cost_amount", precision = 19, scale = 2))
+  @AttributeOverride(
+      name = "currency",
+      column = @Column(name = "registry_lock_or_unlock_cost_currency"))
   Money registryLockOrUnlockBillingCost = DEFAULT_REGISTRY_LOCK_OR_UNLOCK_BILLING_COST;
 
   /**
@@ -474,13 +506,15 @@ public class Tld extends ImmutableObject implements Buildable, UnsafeSerializabl
    * name. This cost is also used to compute costs for transfers, since each transfer includes a
    * renewal to ensure transfers have a cost.
    */
-  @Column(nullable = false)
+  @Column(nullable = false, columnDefinition = "hstore")
+  @Type(BillingCostTransitionUserType.class)
   @JsonDeserialize(using = TimedTransitionPropertyMoneyDeserializer.class)
   TimedTransitionProperty<Money> renewBillingCostTransitions =
       TimedTransitionProperty.withInitialValue(DEFAULT_RENEW_BILLING_COST);
 
   /** A property that tracks the EAP fee schedule (if any) for the TLD. */
-  @Column(nullable = false)
+  @Column(nullable = false, columnDefinition = "hstore")
+  @Type(BillingCostTransitionUserType.class)
   @JsonDeserialize(using = TimedTransitionPropertyMoneyDeserializer.class)
   TimedTransitionProperty<Money> eapFeeSchedule =
       TimedTransitionProperty.withInitialValue(DEFAULT_EAP_BILLING_COST);
@@ -492,11 +526,10 @@ public class Tld extends ImmutableObject implements Buildable, UnsafeSerializabl
   @Column(nullable = false)
   DateTime claimsPeriodEnd = END_OF_TIME;
 
-  /** An allowlist of clients allowed to be used on domains on this TLD (ignored if empty). */
-  @Nullable Set<String> allowedRegistrantContactIds;
-
   /** An allowlist of hosts allowed to be used on domains on this TLD (ignored if empty). */
-  @Nullable Set<String> allowedFullyQualifiedHostNames;
+  @Nullable
+  @JsonSerialize(using = SortedSetSerializer.class)
+  Set<String> allowedFullyQualifiedHostNames;
 
   /**
    * Indicates when the TLD is being modified using locally modified files to override the source
@@ -516,12 +549,27 @@ public class Tld extends ImmutableObject implements Buildable, UnsafeSerializabl
    * (ex: add a token to the list or remove a token from the list) should not be allowed without
    * resetting the entire list contents.
    */
+  @Type(AllocationTokenVkeyListUserType.class)
   @JsonSerialize(using = TokenVKeyListSerializer.class)
   @JsonDeserialize(using = TokenVKeyListDeserializer.class)
+  @Convert(converter = VKeyConverter_AllocationToken.class)
   List<VKey<AllocationToken>> defaultPromoTokens;
 
   /** A set of allowed {@link IdnTableEnum}s for this TLD, or empty if we should use the default. */
+  // @Type(IdnTableEnumSetUserType.class)
+  @Enumerated(EnumType.STRING)
+  @JsonSerialize(using = SortedEnumSetSerializer.class)
   Set<IdnTableEnum> idnTables;
+
+  /**
+   * The start time of this TLD's enrollment in the BSA program, if applicable.
+   *
+   * <p>This property is excluded from source-based configuration and is managed directly in the
+   * database.
+   */
+  // TODO(b/309175410): implement setup and cleanup procedure for joining or leaving BSA, and see
+  // if it can be integrated with the ConfigTldCommand.
+  @JsonIgnore @Nullable DateTime bsaEnrollStartTime;
 
   public String getTldStr() {
     return tldStr;
@@ -540,6 +588,12 @@ public class Tld extends ImmutableObject implements Buildable, UnsafeSerializabl
   /** Retrieve the TLD type (real or test). */
   public TldType getTldType() {
     return tldType;
+  }
+
+  /** Returns the time when this TLD was enrolled in the Brand Safety Alliance (BSA) program. */
+  @JsonIgnore
+  public Optional<DateTime> getBsaEnrollStartTime() {
+    return Optional.ofNullable(this.bsaEnrollStartTime);
   }
 
   /** Retrieve whether invoicing is enabled. */
@@ -623,9 +677,12 @@ public class Tld extends ImmutableObject implements Buildable, UnsafeSerializabl
    * Use {@code PricingEngineProxy.getDomainCreateCost} instead of this to find the cost for a
    * domain create.
    */
-  @VisibleForTesting
-  public Money getCreateBillingCost() {
-    return createBillingCost;
+  public Money getCreateBillingCost(DateTime now) {
+    return createBillingCostTransitions.getValueAtTime(now);
+  }
+
+  public ImmutableSortedMap<DateTime, Money> getCreateBillingCostTransitions() {
+    return createBillingCostTransitions.toValueMap();
   }
 
   /**
@@ -728,10 +785,6 @@ public class Tld extends ImmutableObject implements Buildable, UnsafeSerializabl
   /** Retrieve the TLD unicode representation. */
   public String getTldUnicode() {
     return tldUnicode;
-  }
-
-  public ImmutableSet<String> getAllowedRegistrantContactIds() {
-    return nullToEmptyImmutableCopy(allowedRegistrantContactIds);
   }
 
   public ImmutableSet<String> getAllowedFullyQualifiedHostNames() {
@@ -905,13 +958,19 @@ public class Tld extends ImmutableObject implements Buildable, UnsafeSerializabl
       return this;
     }
 
-    public Builder setCreateBillingCost(Money amount) {
-      checkArgument(amount.isPositiveOrZero(), "createBillingCost cannot be negative");
-      getInstance().createBillingCost = amount;
+    public Builder setCreateBillingCostTransitions(
+        ImmutableSortedMap<DateTime, Money> createCostsMap) {
+      checkArgumentNotNull(createCostsMap, "Create billing costs map cannot be null");
+      checkArgument(
+          createCostsMap.values().stream().allMatch(Money::isPositiveOrZero),
+          "Create billing cost cannot be negative");
+      getInstance().createBillingCostTransitions =
+          TimedTransitionProperty.fromValueMap(createCostsMap);
       return this;
     }
 
     public Builder setReservedListsByName(Set<String> reservedListNames) {
+      // TODO(b/309175133): forbid if enrolled with BSA
       checkArgument(reservedListNames != null, "reservedListNames must not be null");
       ImmutableSet.Builder<ReservedList> builder = new ImmutableSet.Builder<>();
       for (String reservedListName : reservedListNames) {
@@ -931,6 +990,7 @@ public class Tld extends ImmutableObject implements Buildable, UnsafeSerializabl
     }
 
     public Builder setReservedLists(Set<ReservedList> reservedLists) {
+      // TODO(b/309175133): forbid if enrolled with BSA
       checkArgumentNotNull(reservedLists, "reservedLists must not be null");
       ImmutableSet.Builder<String> nameBuilder = new ImmutableSet.Builder<>();
       for (ReservedList reservedList : reservedLists) {
@@ -980,12 +1040,13 @@ public class Tld extends ImmutableObject implements Buildable, UnsafeSerializabl
       return this;
     }
 
-    private static final Pattern ROID_SUFFIX_PATTERN = Pattern.compile("^[A-Z\\d_]{1,8}$");
+    public static final Pattern ROID_SUFFIX_PATTERN = Pattern.compile("^[A-Z\\d]{1,8}$");
 
     public Builder setRoidSuffix(String roidSuffix) {
       checkArgument(
           ROID_SUFFIX_PATTERN.matcher(roidSuffix).matches(),
-          "ROID suffix must be in format %s",
+          "ROID suffix %s must be in format %s",
+          roidSuffix,
           ROID_SUFFIX_PATTERN.pattern());
       getInstance().roidSuffix = roidSuffix;
       return this;
@@ -1011,12 +1072,6 @@ public class Tld extends ImmutableObject implements Buildable, UnsafeSerializabl
 
     public Builder setClaimsPeriodEnd(DateTime claimsPeriodEnd) {
       getInstance().claimsPeriodEnd = checkArgumentNotNull(claimsPeriodEnd);
-      return this;
-    }
-
-    public Builder setAllowedRegistrantContactIds(
-        ImmutableSet<String> allowedRegistrantContactIds) {
-      getInstance().allowedRegistrantContactIds = allowedRegistrantContactIds;
       return this;
     }
 
@@ -1049,12 +1104,19 @@ public class Tld extends ImmutableObject implements Buildable, UnsafeSerializabl
     }
 
     public Builder setIdnTables(ImmutableSet<IdnTableEnum> idnTables) {
+      // TODO(b/309175133): forbid if enrolled with BSA.
       getInstance().idnTables = idnTables;
       return this;
     }
 
     public Builder setBreakglassMode(boolean breakglassMode) {
       getInstance().breakglassMode = breakglassMode;
+      return this;
+    }
+
+    public Builder setBsaEnrollStartTime(Optional<DateTime> enrollTime) {
+      // TODO(b/309175133): forbid if enrolled with BSA
+      getInstance().bsaEnrollStartTime = enrollTime.orElse(null);
       return this;
     }
 
@@ -1074,13 +1136,11 @@ public class Tld extends ImmutableObject implements Buildable, UnsafeSerializabl
       // here to catch cases where we loaded an invalid TimedTransitionProperty from the database
       // and cloned it into a new builder, to block re-building a Tld in an invalid state.
       instance.tldStateTransitions.checkValidity();
+      instance.createBillingCostTransitions.checkValidity();
       instance.renewBillingCostTransitions.checkValidity();
       instance.eapFeeSchedule.checkValidity();
       // All costs must be in the expected currency.
       checkArgumentNotNull(instance.getCurrency(), "Currency must be set");
-      checkArgument(
-          instance.getCreateBillingCost().getCurrencyUnit().equals(instance.currency),
-          "Create cost must be in the tld's currency");
       checkArgument(
           instance.getRestoreBillingCost().getCurrencyUnit().equals(instance.currency),
           "Restore cost must be in the TLD's currency");
@@ -1095,6 +1155,9 @@ public class Tld extends ImmutableObject implements Buildable, UnsafeSerializabl
       checkArgument(
           instance.getRenewBillingCostTransitions().values().stream().allMatch(currencyCheck),
           "Renew cost must be in the TLD's currency");
+      checkArgument(
+          instance.getCreateBillingCostTransitions().values().stream().allMatch(currencyCheck),
+          "Create cost must be in the TLD's currency");
       checkArgument(
           instance.eapFeeSchedule.toValueMap().values().stream().allMatch(currencyCheck),
           "All EAP fees must be in the TLD's currency");

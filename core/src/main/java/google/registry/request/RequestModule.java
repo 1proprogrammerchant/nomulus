@@ -18,6 +18,10 @@ import static com.google.common.net.MediaType.JSON_UTF_8;
 import static google.registry.dns.PublishDnsUpdatesAction.CLOUD_TASKS_RETRY_HEADER;
 import static google.registry.model.tld.Tlds.assertTldExists;
 import static google.registry.model.tld.Tlds.assertTldsExist;
+import static google.registry.request.RequestParameters.PARAM_BATCH_SIZE;
+import static google.registry.request.RequestParameters.PARAM_DRY_RUN;
+import static google.registry.request.RequestParameters.extractBooleanParameter;
+import static google.registry.request.RequestParameters.extractOptionalIntParameter;
 import static google.registry.request.RequestParameters.extractRequiredHeader;
 import static google.registry.request.RequestParameters.extractRequiredParameter;
 import static google.registry.request.RequestParameters.extractSetOfParameters;
@@ -41,12 +45,12 @@ import google.registry.request.auth.AuthResult;
 import google.registry.request.lock.LockHandler;
 import google.registry.request.lock.LockHandlerImpl;
 import google.registry.tools.GsonUtils;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpSession;
 import java.io.IOException;
 import java.util.Map;
 import java.util.Optional;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
-import javax.servlet.http.HttpSession;
 import org.json.simple.JSONValue;
 import org.json.simple.parser.ParseException;
 
@@ -92,6 +96,18 @@ public final class RequestModule {
   }
 
   @Provides
+  @Parameter(RequestParameters.PARAM_DRY_RUN)
+  static boolean provideDryRun(HttpServletRequest req) {
+    return extractBooleanParameter(req, PARAM_DRY_RUN);
+  }
+
+  @Provides
+  @Parameter(PARAM_BATCH_SIZE)
+  static Optional<Integer> provideBatchSize(HttpServletRequest req) {
+    return extractOptionalIntParameter(req, PARAM_BATCH_SIZE);
+  }
+
+  @Provides
   static Response provideResponse(ResponseImpl response) {
     return response;
   }
@@ -119,7 +135,8 @@ public final class RequestModule {
   @Provides
   @RequestUrl
   static String provideRequestUrl(HttpServletRequest req) {
-    return req.getRequestURL().toString();
+    String url = req.getRequestURL().toString();
+    return url.startsWith("https") ? url : url.replaceFirst("http", "https");
   }
 
   @Provides
@@ -135,17 +152,9 @@ public final class RequestModule {
    * query string.
    */
   @Provides
-  @FullServletPath
-  static String provideFullServletPath(HttpServletRequest req) {
-    // Include the port only if it differs from the default for the scheme.
-    if (("http".equals(req.getScheme()) && (req.getServerPort() == 80))
-        || ("https".equals(req.getScheme()) && (req.getServerPort() == 443))) {
-      return String.format("%s://%s%s", req.getScheme(), req.getServerName(), req.getServletPath());
-    } else {
-      return String.format(
-          "%s://%s:%d%s",
-          req.getScheme(), req.getServerName(), req.getServerPort(), req.getServletPath());
-    }
+  @RequestServerName
+  static String provideServerName(HttpServletRequest req) {
+    return req.getServerName();
   }
 
   @Provides
@@ -221,7 +230,7 @@ public final class RequestModule {
    *
    * <p>This performs a shallow copy of the {@code Map<String, String[]>} data structure from the
    * servlets API, each time this is provided. This is almost certainly less expensive than the
-   * thread synchronization expense of {@link javax.inject.Singleton @Singleton}.
+   * thread synchronization expense of {@link jakarta.inject.Singleton @Singleton}.
    *
    * <p><b>Note:</b> If a parameter is specified without a value, e.g. {@code /foo?lol} then an
    * empty string value is assumed, since Guava's multimap doesn't permit {@code null} mappings.

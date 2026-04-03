@@ -25,6 +25,7 @@ import google.registry.config.RegistryConfig.ConfigModule;
 import google.registry.config.RegistryConfig.ConfigModule.TmchCaMode;
 import google.registry.flows.custom.CustomLogicFactory;
 import google.registry.flows.custom.TestCustomLogicFactory;
+import google.registry.flows.domain.DomainDeletionTimeCache;
 import google.registry.flows.domain.DomainFlowTmchUtils;
 import google.registry.monitoring.whitebox.EppMetric;
 import google.registry.request.RequestScope;
@@ -37,7 +38,7 @@ import google.registry.tmch.TmchCertificateAuthority;
 import google.registry.tmch.TmchXmlSignature;
 import google.registry.util.Clock;
 import google.registry.util.Sleeper;
-import javax.inject.Singleton;
+import jakarta.inject.Singleton;
 
 /** Dagger component for running EPP tests. */
 @Singleton
@@ -125,6 +126,11 @@ public interface EppTestComponent {
     @Provides
     ServerTridProvider provideServerTridProvider() {
       return new FakeServerTridProvider();
+    }
+
+    @Provides
+    DomainDeletionTimeCache provideDomainDeletionTimeCache() {
+      return DomainDeletionTimeCache.create();
     }
   }
 

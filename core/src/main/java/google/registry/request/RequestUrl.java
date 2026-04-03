@@ -16,14 +16,14 @@ package google.registry.request;
 
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 
+import jakarta.inject.Qualifier;
 import java.lang.annotation.Documented;
 import java.lang.annotation.Retention;
-import javax.inject.Qualifier;
 
 /**
  * Dagger qualifier for the HTTP request URL.
  *
- * @see javax.servlet.http.HttpServletRequest#getRequestURL()
+ * @see jakarta.servlet.http.HttpServletRequest#getRequestURL()
  */
 @Retention(RUNTIME)
 @Qualifier

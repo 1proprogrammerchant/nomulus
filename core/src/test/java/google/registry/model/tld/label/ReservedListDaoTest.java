@@ -22,6 +22,8 @@ import google.registry.model.tld.label.ReservedList.ReservedListEntry;
 import google.registry.persistence.transaction.JpaTestExtensions;
 import google.registry.persistence.transaction.JpaTestExtensions.JpaIntegrationWithCoverageExtension;
 import google.registry.testing.FakeClock;
+import jakarta.persistence.OptimisticLockException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -52,7 +54,6 @@ public class ReservedListDaoTest {
         new ReservedList.Builder()
             .setName("testlist")
             .setCreationTimestamp(fakeClock.nowUtc())
-            .setShouldPublish(false)
             .setReservedListMap(testReservations)
             .build();
   }
@@ -73,10 +74,33 @@ public class ReservedListDaoTest {
   }
 
   @Test
+  void save_withRetry_worksSuccessfully() {
+    AtomicBoolean isFirstAttempt = new AtomicBoolean(true);
+    tm().transact(
+            () -> {
+              ReservedListDao.save(testReservedList);
+              if (isFirstAttempt.get()) {
+                isFirstAttempt.set(false);
+                throw new OptimisticLockException();
+              }
+            });
+    tm().transact(
+            () -> {
+              ReservedList persistedList =
+                  tm().query("FROM ReservedList WHERE name = :name", ReservedList.class)
+                      .setParameter("name", "testlist")
+                      .getSingleResult();
+              assertThat(persistedList.getReservedListEntries())
+                  .containsExactlyEntriesIn(testReservations);
+              assertThat(persistedList.getCreationTimestamp()).isEqualTo(fakeClock.nowUtc());
+            });
+  }
+
+  @Test
   void delete_worksSuccessfully() {
-    ReservedListDao.save(testReservedList);
+    var persisted = ReservedListDao.save(testReservedList);
     assertThat(ReservedListDao.checkExists("testlist")).isTrue();
-    ReservedListDao.delete(testReservedList);
+    ReservedListDao.delete(persisted);
     assertThat(ReservedListDao.checkExists("testlist")).isFalse();
   }
 
@@ -102,7 +126,6 @@ public class ReservedListDaoTest {
     assertThat(persistedList.getRevisionId()).isNotNull();
     assertThat(persistedList.getCreationTimestamp()).isEqualTo(fakeClock.nowUtc());
     assertThat(persistedList.getName()).isEqualTo("testlist");
-    assertThat(persistedList.getShouldPublish()).isFalse();
     assertThat(persistedList.getReservedListEntries()).containsExactlyEntriesIn(testReservations);
   }
 
@@ -112,7 +135,6 @@ public class ReservedListDaoTest {
         new ReservedList.Builder()
             .setName("testlist")
             .setCreationTimestamp(fakeClock.nowUtc())
-            .setShouldPublish(false)
             .setReservedListMap(
                 ImmutableMap.of(
                     "old",
@@ -124,7 +146,6 @@ public class ReservedListDaoTest {
     assertThat(persistedList.getRevisionId()).isNotNull();
     assertThat(persistedList.getCreationTimestamp()).isEqualTo(fakeClock.nowUtc());
     assertThat(persistedList.getName()).isEqualTo("testlist");
-    assertThat(persistedList.getShouldPublish()).isFalse();
     assertThat(persistedList.getReservedListEntries()).containsExactlyEntriesIn(testReservations);
   }
 }

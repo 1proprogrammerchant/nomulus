@@ -38,6 +38,7 @@ class CreateDomainCommandTest extends EppToolCommandTestCase<CreateDomainCommand
   @BeforeEach
   void beforeEach() {
     command.passwordGenerator = new DeterministicStringGenerator("abcdefghijklmnopqrstuvwxyz");
+    command.printStream = System.out;
   }
 
   @Test
@@ -46,9 +47,6 @@ class CreateDomainCommandTest extends EppToolCommandTestCase<CreateDomainCommand
         "--client=NewRegistrar",
         "--period=1",
         "--nameservers=ns1.zdns.google,ns2.zdns.google,ns3.zdns.google,ns4.zdns.google",
-        "--registrant=crr-admin",
-        "--admins=crr-admin",
-        "--techs=crr-tech",
         "--password=2fooBAR",
         "--ds_records=1 2 2 9F86D081884C7D659A2FEAA0C55AD015A3BF4F1B2B0B822CD15D6C15B0F00A08,4 5 1"
             + " A94A8FE5CCB19BA61C4C0873D391E987982FBBD3",
@@ -63,9 +61,6 @@ class CreateDomainCommandTest extends EppToolCommandTestCase<CreateDomainCommand
         "--client=NewRegistrar",
         "--period=1",
         "--nameservers=NS1.zdns.google,ns2.ZDNS.google,ns3.zdns.gOOglE,ns4.zdns.google",
-        "--registrant=crr-admin",
-        "--admins=crr-admin",
-        "--techs=crr-tech",
         "--password=2fooBAR",
         "--ds_records=1 2 2 9F86D081884C7D659A2FEAA0C55AD015A3BF4F1B2B0B822CD15D6C15B0F00A08,4 5 1"
             + " A94A8FE5CCB19BA61C4C0873D391E987982FBBD3",
@@ -80,9 +75,6 @@ class CreateDomainCommandTest extends EppToolCommandTestCase<CreateDomainCommand
         "--client=NewRegistrar",
         "--period=1",
         "--nameservers=ns[1-4].zdns.google",
-        "--registrant=crr-admin",
-        "--admins=crr-admin",
-        "--techs=crr-tech",
         "--password=2fooBAR",
         "--ds_records=1 2 2 9F86D081884C7D659A2FEAA0C55AD015A3BF4F1B2B0B822CD15D6C15B0F00A08,4 5 1"
             + " A94A8FE5CCB19BA61C4C0873D391E987982FBBD3",
@@ -97,9 +89,6 @@ class CreateDomainCommandTest extends EppToolCommandTestCase<CreateDomainCommand
         "--client=NewRegistrar",
         "--period=1",
         "--nameservers=NS[1-4].zdns.google",
-        "--registrant=crr-admin",
-        "--admins=crr-admin",
-        "--techs=crr-tech",
         "--password=2fooBAR",
         "--ds_records=1 2 2 9F86D081884C7D659A2FEAA0C55AD015A3BF4F1B2B0B822CD15D6C15B0F00A08,4 5 1"
             + " A94A8FE5CCB19BA61C4C0873D391E987982FBBD3",
@@ -109,13 +98,10 @@ class CreateDomainCommandTest extends EppToolCommandTestCase<CreateDomainCommand
   }
 
   @Test
-  void testSuccess_minimal() throws Exception {
+  void testSuccess_minimumDataset_noContacts() throws Exception {
     // Test that each optional field can be omitted. Also tests the auto-gen password.
     runCommandForced(
         "--client=NewRegistrar",
-        "--registrant=crr-admin",
-        "--admins=crr-admin",
-        "--techs=crr-tech",
         "example.tld");
     eppVerifier.verifySent("domain_create_minimal.xml");
   }
@@ -125,9 +111,6 @@ class CreateDomainCommandTest extends EppToolCommandTestCase<CreateDomainCommand
     createTld("abc");
     runCommandForced(
         "--client=NewRegistrar",
-        "--registrant=crr-admin",
-        "--admins=crr-admin",
-        "--techs=crr-tech",
         "example.tld",
         "example.abc");
     eppVerifier.verifySent("domain_create_minimal.xml").verifySent("domain_create_minimal_abc.xml");
@@ -145,14 +128,9 @@ class CreateDomainCommandTest extends EppToolCommandTestCase<CreateDomainCommand
     tm().transact(() -> tm().put(registry));
     runCommandForced(
         "--client=NewRegistrar",
-        "--registrant=crr-admin",
-        "--admins=crr-admin",
-        "--techs=crr-tech",
         "example.tld",
         "example.abc");
-    eppVerifier
-        .verifySent("domain_create_minimal.xml")
-        .verifySent("domain_create_minimal_abc.xml");
+    eppVerifier.verifySent("domain_create_minimal.xml").verifySent("domain_create_minimal_abc.xml");
   }
 
   @Test
@@ -166,9 +144,6 @@ class CreateDomainCommandTest extends EppToolCommandTestCase<CreateDomainCommand
             .build());
     runCommandForced(
         "--client=NewRegistrar",
-        "--registrant=crr-admin",
-        "--admins=crr-admin",
-        "--techs=crr-tech",
         "--period=3",
         "--force_premiums",
         "parajiumu.baar");
@@ -183,9 +158,6 @@ class CreateDomainCommandTest extends EppToolCommandTestCase<CreateDomainCommand
     createTld("abc");
     runCommandForced(
         "--client=NewRegistrar",
-        "--registrant=crr-admin",
-        "--admins=crr-admin",
-        "--techs=crr-tech",
         "--force_premiums",
         "example.tld",
         "palladium.tld",
@@ -204,10 +176,7 @@ class CreateDomainCommandTest extends EppToolCommandTestCase<CreateDomainCommand
     createTld("tld");
     runCommandForced(
         "--client=NewRegistrar",
-        "--registrant=crr-admin",
-        "--admins=crr-admin",
-        "--techs=crr-tech",
-        "--reason=\"Creating test domain\"",
+        "--reason=Creating test domain",
         "--registrar_request=false",
         "example.tld");
     eppVerifier.verifySent("domain_create_metadata.xml");
@@ -218,9 +187,6 @@ class CreateDomainCommandTest extends EppToolCommandTestCase<CreateDomainCommand
     createTld("tld");
     runCommandForced(
         "--client=NewRegistrar",
-        "--registrant=crr-admin",
-        "--admins=crr-admin",
-        "--techs=crr-tech",
         "--allocation_token=abc123",
         "example.tld");
     eppVerifier.verifySent("domain_create_token.xml");
@@ -234,9 +200,6 @@ class CreateDomainCommandTest extends EppToolCommandTestCase<CreateDomainCommand
             () ->
                 runCommandForced(
                     "--client=NewRegistrar",
-                    "--registrant=crr-admin",
-                    "--admins=crr-admin",
-                    "--techs=crr-tech",
                     "example.tld",
                     "example.tld"));
     assertThat(thrown).hasMessageThat().contains("Duplicate arguments found: 'example.tld'");
@@ -245,14 +208,7 @@ class CreateDomainCommandTest extends EppToolCommandTestCase<CreateDomainCommand
   @Test
   void testFailure_missingDomain() {
     ParameterException thrown =
-        assertThrows(
-            ParameterException.class,
-            () ->
-                runCommandForced(
-                    "--client=NewRegistrar",
-                    "--registrant=crr-admin",
-                    "--admins=crr-admin",
-                    "--techs=crr-tech"));
+        assertThrows(ParameterException.class, () -> runCommandForced("--client=NewRegistrar"));
     assertThat(thrown).hasMessageThat().contains("Main parameters are required");
   }
 
@@ -263,53 +219,8 @@ class CreateDomainCommandTest extends EppToolCommandTestCase<CreateDomainCommand
             ParameterException.class,
             () ->
                 runCommandForced(
-                    "--admins=crr-admin",
-                    "--techs=crr-tech",
-                    "--registrant=crr-admin",
                     "example.tld"));
     assertThat(thrown).hasMessageThat().contains("--client");
-  }
-
-  @Test
-  void testFailure_missingRegistrant() {
-    IllegalArgumentException thrown =
-        assertThrows(
-            IllegalArgumentException.class,
-            () ->
-                runCommandForced(
-                    "--client=NewRegistrar",
-                    "--admins=crr-admin",
-                    "--techs=crr-tech",
-                    "example.tld"));
-    assertThat(thrown).hasMessageThat().contains("Registrant must be specified");
-  }
-
-  @Test
-  void testFailure_missingAdmins() {
-    IllegalArgumentException thrown =
-        assertThrows(
-            IllegalArgumentException.class,
-            () ->
-                runCommandForced(
-                    "--client=NewRegistrar",
-                    "--registrant=crr-admin",
-                    "--techs=crr-tech",
-                    "example.tld"));
-    assertThat(thrown).hasMessageThat().contains("At least one admin must be specified");
-  }
-
-  @Test
-  void testFailure_missingTechs() {
-    IllegalArgumentException thrown =
-        assertThrows(
-            IllegalArgumentException.class,
-            () ->
-                runCommandForced(
-                    "--client=NewRegistrar",
-                    "--registrant=crr-admin",
-                    "--admins=crr-admin",
-                    "example.tld"));
-    assertThat(thrown).hasMessageThat().contains("At least one tech must be specified");
   }
 
   @Test
@@ -320,9 +231,6 @@ class CreateDomainCommandTest extends EppToolCommandTestCase<CreateDomainCommand
             () ->
                 runCommandForced(
                     "--client=NewRegistrar",
-                    "--registrant=crr-admin",
-                    "--admins=crr-admin",
-                    "--techs=crr-tech",
                     "--nameservers=ns1.zdns.google,ns2.zdns.google,ns3.zdns.google,ns4.zdns.google,"
                         + "ns5.zdns.google,ns6.zdns.google,ns7.zdns.google,ns8.zdns.google,"
                         + "ns9.zdns.google,ns10.zdns.google,ns11.zdns.google,ns12.zdns.google,"
@@ -339,9 +247,6 @@ class CreateDomainCommandTest extends EppToolCommandTestCase<CreateDomainCommand
             () ->
                 runCommandForced(
                     "--client=NewRegistrar",
-                    "--registrant=crr-admin",
-                    "--admins=crr-admin",
-                    "--techs=crr-tech",
                     "--nameservers=ns[1-14].zdns.google",
                     "example.tld"));
     assertThat(thrown).hasMessageThat().contains("There can be at most 13 nameservers");
@@ -355,9 +260,6 @@ class CreateDomainCommandTest extends EppToolCommandTestCase<CreateDomainCommand
             () ->
                 runCommandForced(
                     "--client=NewRegistrar",
-                    "--registrant=crr-admin",
-                    "--admins=crr-admin",
-                    "--techs=crr-tech",
                     "--period=x",
                     "--domain=example.tld"));
     assertThat(thrown).hasMessageThat().contains("--period");
@@ -371,9 +273,6 @@ class CreateDomainCommandTest extends EppToolCommandTestCase<CreateDomainCommand
             () ->
                 runCommandForced(
                     "--client=NewRegistrar",
-                    "--registrant=crr-admin",
-                    "--admins=crr-admin",
-                    "--techs=crr-tech",
                     "--ds_records=1 2 3 abcd",
                     "example.tld"));
     assertThat(thrown).hasMessageThat().isEqualTo("DS record uses an unrecognized digest type: 3");
@@ -387,9 +286,6 @@ class CreateDomainCommandTest extends EppToolCommandTestCase<CreateDomainCommand
             () ->
                 runCommandForced(
                     "--client=NewRegistrar",
-                    "--registrant=crr-admin",
-                    "--admins=crr-admin",
-                    "--techs=crr-tech",
                     "--ds_records=1 2 1 abcd",
                     "example.tld"));
     assertThat(thrown).hasMessageThat().isEqualTo("DS record has an invalid digest length: ABCD");
@@ -403,9 +299,6 @@ class CreateDomainCommandTest extends EppToolCommandTestCase<CreateDomainCommand
             () ->
                 runCommandForced(
                     "--client=NewRegistrar",
-                    "--registrant=crr-admin",
-                    "--admins=crr-admin",
-                    "--techs=crr-tech",
                     "--ds_records=1 999 4"
                         + " 768412320F7B0AA5812FCE428DC4706B3CAE50E02A64CAA16A782249BFE8EFC4B7EF1C"
                         + "CB126255D196047DFEDF17A0A9",
@@ -421,9 +314,6 @@ class CreateDomainCommandTest extends EppToolCommandTestCase<CreateDomainCommand
             () ->
                 runCommandForced(
                     "--client=NewRegistrar",
-                    "--registrant=crr-admin",
-                    "--admins=crr-admin",
-                    "--techs=crr-tech",
                     "--ds_records=1 2 3 ab cd",
                     "example.tld"));
     assertThat(thrown).hasMessageThat().contains("should have 4 parts, but has 5");
@@ -437,9 +327,6 @@ class CreateDomainCommandTest extends EppToolCommandTestCase<CreateDomainCommand
             () ->
                 runCommandForced(
                     "--client=NewRegistrar",
-                    "--registrant=crr-admin",
-                    "--admins=crr-admin",
-                    "--techs=crr-tech",
                     "--ds_records=x 2 3 abcd",
                     "example.tld"));
     assertThat(thrown).hasMessageThat().contains("\"x\"");
@@ -453,9 +340,6 @@ class CreateDomainCommandTest extends EppToolCommandTestCase<CreateDomainCommand
             () ->
                 runCommandForced(
                     "--client=NewRegistrar",
-                    "--registrant=crr-admin",
-                    "--admins=crr-admin",
-                    "--techs=crr-tech",
                     "--ds_records=1 x 3 abcd",
                     "example.tld"));
     assertThat(thrown).hasMessageThat().contains("\"x\"");
@@ -469,9 +353,6 @@ class CreateDomainCommandTest extends EppToolCommandTestCase<CreateDomainCommand
             () ->
                 runCommandForced(
                     "--client=NewRegistrar",
-                    "--registrant=crr-admin",
-                    "--admins=crr-admin",
-                    "--techs=crr-tech",
                     "--ds_records=1 2 x abcd",
                     "example.tld"));
     assertThat(thrown).hasMessageThat().contains("\"x\"");
@@ -485,9 +366,6 @@ class CreateDomainCommandTest extends EppToolCommandTestCase<CreateDomainCommand
             () ->
                 runCommandForced(
                     "--client=NewRegistrar",
-                    "--registrant=crr-admin",
-                    "--admins=crr-admin",
-                    "--techs=crr-tech",
                     "--ds_records=1 2 3 xbcd",
                     "example.tld"));
     assertThat(thrown).hasMessageThat().contains("XBCD");
@@ -501,9 +379,6 @@ class CreateDomainCommandTest extends EppToolCommandTestCase<CreateDomainCommand
             () ->
                 runCommandForced(
                     "--client=NewRegistrar",
-                    "--registrant=crr-admin",
-                    "--admins=crr-admin",
-                    "--techs=crr-tech",
                     "--ds_records=1 2 3 abcde",
                     "example.tld"));
     assertThat(thrown).hasMessageThat().contains("length 5");
@@ -517,9 +392,6 @@ class CreateDomainCommandTest extends EppToolCommandTestCase<CreateDomainCommand
             () ->
                 runCommandForced(
                     "--client=NewRegistrar",
-                    "--registrant=crr-admin",
-                    "--admins=crr-admin",
-                    "--techs=crr-tech",
                     "gold.tld"));
     assertThat(thrown)
         .hasMessageThat()

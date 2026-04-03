@@ -14,23 +14,30 @@
 
 package google.registry.rdap;
 
+import static com.google.common.net.HttpHeaders.ACCEPT_ENCODING;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
+import static google.registry.request.UrlConnectionUtils.gUnzipBytes;
+import static google.registry.request.UrlConnectionUtils.isGZipped;
+import static jakarta.servlet.http.HttpServletResponse.SC_OK;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
-import com.google.api.client.http.GenericUrl;
-import com.google.api.client.http.HttpRequest;
-import com.google.api.client.http.HttpResponse;
-import com.google.api.client.http.HttpTransport;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.flogger.FluentLogger;
-import com.google.common.io.ByteStreams;
 import google.registry.model.registrar.Registrar;
+import google.registry.persistence.PersistenceModule;
 import google.registry.request.Action;
+import google.registry.request.HttpException.InternalServerErrorException;
+import google.registry.request.UrlConnectionService;
+import google.registry.request.UrlConnectionUtils;
 import google.registry.request.auth.Auth;
+import google.registry.util.UrlConnectionException;
+import jakarta.inject.Inject;
 import java.io.IOException;
 import java.io.StringReader;
-import javax.inject.Inject;
+import java.net.HttpURLConnection;
+import java.net.URI;
+import java.security.GeneralSecurityException;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVRecord;
@@ -41,35 +48,46 @@ import org.apache.commons.csv.CSVRecord;
  * <p>This will update ALL the REAL registrars. If a REAL registrar doesn't have an RDAP entry in
  * MoSAPI, we'll delete any BaseUrls it has.
  *
- * <p>The ICANN base website that provides this information can be found at
- * https://www.iana.org/assignments/registrar-ids/registrar-ids.xhtml. The provided CSV endpoint
- * requires no authentication.
+ * <p>The ICANN base website that provides this information can be found at <a
+ * href=https://www.iana.org/assignments/registrar-ids/registrar-ids.xhtml>here</a>. The provided
+ * CSV endpoint requires no authentication.
  */
 @Action(
     service = Action.Service.BACKEND,
     path = "/_dr/task/updateRegistrarRdapBaseUrls",
     automaticallyPrintOk = true,
-    auth = Auth.AUTH_API_ADMIN)
+    auth = Auth.AUTH_ADMIN)
 public final class UpdateRegistrarRdapBaseUrlsAction implements Runnable {
 
-  private static final GenericUrl RDAP_IDS_URL =
-      new GenericUrl("https://www.iana.org/assignments/registrar-ids/registrar-ids-1.csv");
+  private static final String RDAP_IDS_URL =
+      "https://www.iana.org/assignments/registrar-ids/registrar-ids-1.csv";
   private static final FluentLogger logger = FluentLogger.forEnclosingClass();
 
-  @Inject HttpTransport httpTransport;
+  @Inject UrlConnectionService urlConnectionService;
 
   @Inject
   UpdateRegistrarRdapBaseUrlsAction() {}
 
   @Override
   public void run() {
-    ImmutableMap<String, String> ianaIdsToUrls = getIanaIdsToUrls();
-    tm().transact(() -> processAllRegistrars(ianaIdsToUrls));
+    try {
+      ImmutableMap<String, String> ianaIdsToUrls = getIanaIdsToUrls();
+      processAllRegistrars(ianaIdsToUrls);
+    } catch (Exception e) {
+      throw new InternalServerErrorException("Error when retrieving RDAP base URL CSV file", e);
+    }
   }
 
-  private void processAllRegistrars(ImmutableMap<String, String> ianaIdsToUrls) {
+  private static void processAllRegistrars(ImmutableMap<String, String> ianaIdsToUrls) {
     int nonUpdatedRegistrars = 0;
-    for (Registrar registrar : Registrar.loadAll()) {
+    // Split into multiple transactions to avoid load-save-reload conflicts. Re-building a registrar
+    // requires a full (cached) load of all registrars to avoid IANA ID conflicts, so if multiple
+    // registrars are modified in the same transaction, the second build call will fail.
+    Iterable<Registrar> registrars =
+        tm().transact(
+                PersistenceModule.TransactionIsolationLevel.TRANSACTION_REPEATABLE_READ,
+                Registrar::loadAll);
+    for (Registrar registrar : registrars) {
       // Only update REAL registrars
       if (registrar.getType() != Registrar.Type.REAL) {
         continue;
@@ -89,29 +107,45 @@ public final class UpdateRegistrarRdapBaseUrlsAction implements Runnable {
               "Updating RDAP base URLs for registrar %s from %s to %s",
               registrar.getRegistrarId(), registrar.getRdapBaseUrls(), baseUrls);
         }
-        tm().put(registrar.asBuilder().setRdapBaseUrls(baseUrls).build());
+        tm().transact(
+                () -> {
+                  // Reload inside a transaction to avoid race conditions
+                  Registrar reloadedRegistrar = tm().loadByEntity(registrar);
+                  tm().put(reloadedRegistrar.asBuilder().setRdapBaseUrls(baseUrls).build());
+                });
       }
     }
     logger.atInfo().log("No change in RDAP base URLs for %d registrars", nonUpdatedRegistrars);
   }
 
-  private ImmutableMap<String, String> getIanaIdsToUrls() {
-    CSVParser csv;
+  private ImmutableMap<String, String> getIanaIdsToUrls()
+      throws IOException, GeneralSecurityException {
+    HttpURLConnection connection =
+        urlConnectionService.createConnection(URI.create(RDAP_IDS_URL).toURL());
+    // Explicitly set the accepted encoding, as we know Brotli causes us problems when talking to
+    // ICANN.
+    connection.setRequestProperty(ACCEPT_ENCODING, "gzip");
+    String csvString;
     try {
-      HttpRequest request = httpTransport.createRequestFactory().buildGetRequest(RDAP_IDS_URL);
-      // AppEngine might insert accept-encodings for us if we use the default gzip, so remove it
-      request.getHeaders().setAcceptEncoding(null);
-      HttpResponse response = request.execute();
-      String csvString = new String(ByteStreams.toByteArray(response.getContent()), UTF_8);
-      csv =
-          CSVFormat.Builder.create(CSVFormat.DEFAULT)
-              .setHeader()
-              .setSkipHeaderRecord(true)
-              .build()
-              .parse(new StringReader(csvString));
-    } catch (IOException e) {
-      throw new RuntimeException("Error when retrieving RDAP base URL CSV file", e);
+      if (connection.getResponseCode() != SC_OK) {
+        throw new UrlConnectionException("Failed to load RDAP base URLs from ICANN", connection);
+      }
+      // With GZIP encoding header in the request (see above) ICANN had still sent response in plain
+      // text until at some point they started sending the response encoded in gzip, which broke our
+      // parsing of the response. Because of that it was decided to check for the response encoding,
+      // just in case they ever start sending a plain text again.
+      byte[] responseBytes = UrlConnectionUtils.getResponseBytes(connection);
+      csvString =
+          new String(isGZipped(responseBytes) ? gUnzipBytes(responseBytes) : responseBytes, UTF_8);
+    } finally {
+      connection.disconnect();
     }
+    CSVParser csv =
+        CSVFormat.Builder.create(CSVFormat.DEFAULT)
+            .setHeader()
+            .setSkipHeaderRecord(true)
+            .get()
+            .parse(new StringReader(csvString));
     ImmutableMap.Builder<String, String> result = new ImmutableMap.Builder<>();
     for (CSVRecord record : csv) {
       String ianaIdentifierString = record.get("ID");

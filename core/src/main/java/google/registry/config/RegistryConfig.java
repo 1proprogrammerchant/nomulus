@@ -28,31 +28,33 @@ import com.google.common.base.Ascii;
 import com.google.common.base.Splitter;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedMap;
 import dagger.Module;
 import dagger.Provides;
+import google.registry.bsa.UploadBsaUnavailableDomainsAction;
 import google.registry.dns.ReadDnsRefreshRequestsAction;
 import google.registry.model.common.DnsRefreshRequest;
+import google.registry.mosapi.MosApiClient;
 import google.registry.persistence.transaction.JpaTransactionManager;
+import google.registry.request.Action.Service;
+import google.registry.util.RegistryEnvironment;
 import google.registry.util.YamlUtils;
+import jakarta.inject.Named;
+import jakarta.inject.Qualifier;
+import jakarta.inject.Singleton;
+import jakarta.mail.internet.AddressException;
+import jakarta.mail.internet.InternetAddress;
 import java.lang.annotation.Documented;
 import java.lang.annotation.Retention;
 import java.net.URI;
 import java.net.URL;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
-import javax.inject.Named;
-import javax.inject.Qualifier;
-import javax.inject.Singleton;
-import javax.mail.internet.AddressException;
-import javax.mail.internet.InternetAddress;
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeConstants;
 import org.joda.time.Duration;
@@ -70,6 +72,7 @@ import org.joda.time.Duration;
  */
 public final class RegistryConfig {
 
+  public static final String CANARY_HEADER = "canary";
   private static final String ENVIRONMENT_CONFIG_FORMAT = "files/nomulus-config-%s.yaml";
   private static final String YAML_CONFIG_PROD =
       readResourceUtf8(RegistryConfig.class, "files/default-config.yaml");
@@ -117,27 +120,21 @@ public final class RegistryConfig {
     }
 
     @Provides
+    @Config("baseDomain")
+    public static String provideBaseDomain(RegistryConfigSettings config) {
+      return config.gcpProject.baseDomain;
+    }
+
+    @Provides
     @Config("locationId")
     public static String provideLocationId(RegistryConfigSettings config) {
       return config.gcpProject.locationId;
     }
 
-
-    /**
-     * The filename of the logo to be displayed in the header of the registrar console.
-     *
-     * @see google.registry.ui.server.registrar.ConsoleUiAction
-     */
-    @Provides
-    @Config("logoFilename")
-    public static String provideLogoFilename(RegistryConfigSettings config) {
-      return config.registrarConsole.logoFilename;
-    }
-
     /**
      * The product name of this specific registry. Used throughout the registrar console.
      *
-     * @see google.registry.ui.server.registrar.ConsoleUiAction
+     * @see google.registry.ui.server.console.ConsoleUserDataAction
      */
     @Provides
     @Config("productName")
@@ -146,15 +143,15 @@ public final class RegistryConfig {
     }
 
     /**
-     * Returns the roid suffix to be used for the roids of all contacts and hosts. E.g. a value of
-     * "ROID" would end up creating roids that look like "ABC123-ROID".
+     * Returns the roid suffix to be used for the roids of all hosts. E.g. a value of "ROID" would
+     * end up creating roids that look like "ABC123-ROID".
      *
      * @see <a href="http://www.iana.org/assignments/epp-repository-ids/epp-repository-ids.xhtml">
      *     Extensible Provisioning Protocol (EPP) Repository Identifiers</a>
      */
     @Provides
-    @Config("contactAndHostRoidSuffix")
-    public static String provideContactAndHostRoidSuffix(RegistryConfigSettings config) {
+    @Config("hostRoidSuffix")
+    public static String provideHostRoidSuffix(RegistryConfigSettings config) {
       return config.registryPolicy.contactAndHostRoidSuffix;
     }
 
@@ -165,22 +162,10 @@ public final class RegistryConfig {
     }
 
     /**
-     * The e-mail address for questions about integrating with the registry. Used in the
-     * "contact-us" section of the registrar console.
-     *
-     * @see google.registry.ui.server.registrar.ConsoleUiAction
-     */
-    @Provides
-    @Config("integrationEmail")
-    public static String provideIntegrationEmail(RegistryConfigSettings config) {
-      return config.registrarConsole.integrationEmailAddress;
-    }
-
-    /**
      * The e-mail address for general support. Used in the "contact-us" section of the registrar
      * console.
      *
-     * @see google.registry.ui.server.registrar.ConsoleUiAction
+     * @see google.registry.ui.server.console.ConsoleUserDataAction
      */
     @Provides
     @Config("supportEmail")
@@ -189,21 +174,20 @@ public final class RegistryConfig {
     }
 
     /**
-     * The "From" e-mail address for announcements. Used in the "contact-us" section of the
-     * registrar console.
+     * The DUM file name, used as a file name base for DUM csv file
      *
-     * @see google.registry.ui.server.registrar.ConsoleUiAction
+     * @see google.registry.ui.server.console.ConsoleDumDownloadAction
      */
     @Provides
-    @Config("announcementsEmail")
-    public static String provideAnnouncementsEmail(RegistryConfigSettings config) {
-      return config.registrarConsole.announcementsEmailAddress;
+    @Config("dumFileName")
+    public static String provideDumFileName(RegistryConfigSettings config) {
+      return config.registrarConsole.dumFileName;
     }
 
     /**
      * The contact phone number. Used in the "contact-us" section of the registrar console.
      *
-     * @see google.registry.ui.server.registrar.ConsoleUiAction
+     * @see google.registry.ui.server.console.ConsoleUserDataAction
      */
     @Provides
     @Config("supportPhoneNumber")
@@ -215,28 +199,12 @@ public final class RegistryConfig {
      * The URL for technical support docs. Used in the "contact-us" section of the registrar
      * console.
      *
-     * @see google.registry.ui.server.registrar.ConsoleUiAction
+     * @see google.registry.ui.server.console.ConsoleUserDataAction
      */
     @Provides
     @Config("technicalDocsUrl")
     public static String provideTechnicalDocsUrl(RegistryConfigSettings config) {
       return config.registrarConsole.technicalDocsUrl;
-    }
-
-    /**
-     * Configuration for analytics services installed in the web console.
-     *
-     * @see google.registry.ui.server.registrar.ConsoleUiAction
-     * @see google.registry.ui.soy.registrar.AnalyticsSoyInfo
-     */
-    @Provides
-    @Config("analyticsConfig")
-    public static Map<String, Object> provideAnalyticsConfig(RegistryConfigSettings config) {
-      // Can't be an ImmutableMap because it may contain null values.
-      HashMap<String, Object> analyticsConfig = new HashMap<>();
-      analyticsConfig.put(
-          "googleAnalyticsId", config.registrarConsole.analyticsConfig.googleAnalyticsId);
-      return Collections.unmodifiableMap(analyticsConfig);
     }
 
     /**
@@ -250,7 +218,11 @@ public final class RegistryConfig {
       return projectId + "-zonefiles";
     }
 
-    /** @see RegistryConfig#getDatabaseRetention() */
+    /**
+     * Returns the length of time before commit logs should be deleted from the database.
+     *
+     * @see RegistryConfig#getDatabaseRetention()
+     */
     @Provides
     @Config("databaseRetention")
     public static Duration provideDatabaseRetention() {
@@ -269,6 +241,18 @@ public final class RegistryConfig {
     }
 
     /**
+     * The GCS bucket for exporting lists of unavailable names for the BSA.
+     *
+     * @see UploadBsaUnavailableDomainsAction
+     */
+    @Provides
+    @Config("bsaUnavailableDomainsGcsBucket")
+    public static String provideBsaUnavailableNamesGcsBucket(
+        @Config("projectId") String projectId) {
+      return projectId + "-bsa-unavailable-domains";
+    }
+
+    /**
      * Returns the Google Cloud Storage bucket for staging BRDA escrow deposits.
      *
      * @see google.registry.rde.PendingDepositChecker
@@ -279,7 +263,11 @@ public final class RegistryConfig {
       return projectId + "-icann-brda";
     }
 
-    /** @see google.registry.rde.BrdaCopyAction */
+    /**
+     * Returns the day of the week on which BRDA deposits should be made.
+     *
+     * @see google.registry.rde.BrdaCopyAction
+     */
     @Provides
     @Config("brdaDayOfWeek")
     public static int provideBrdaDayOfWeek() {
@@ -399,27 +387,6 @@ public final class RegistryConfig {
     }
 
     @Provides
-    @Config("cloudSqlInstanceConnectionName")
-    public static String provideCloudSqlInstanceConnectionName(RegistryConfigSettings config) {
-      return config.cloudSql.instanceConnectionName;
-    }
-
-    @Provides
-    @Config("cloudSqlReplicaInstanceConnectionName")
-    public static Optional<String> provideCloudSqlReplicaInstanceConnectionName(
-        RegistryConfigSettings config) {
-      return Optional.ofNullable(config.cloudSql.replicaInstanceConnectionName);
-    }
-
-    @Provides
-    @Config("cloudSqlDbInstanceName")
-    public static String provideCloudSqlDbInstance(RegistryConfigSettings config) {
-      // Format of instanceConnectionName: project-id:region:instance-name
-      int lastColonIndex = config.cloudSql.instanceConnectionName.lastIndexOf(':');
-      return config.cloudSql.instanceConnectionName.substring(lastColonIndex + 1);
-    }
-
-    @Provides
     @Config("cloudDnsRootUrl")
     public static Optional<String> getCloudDnsRootUrl(RegistryConfigSettings config) {
       return Optional.ofNullable(config.cloudDns.rootUrl);
@@ -458,10 +425,22 @@ public final class RegistryConfig {
     }
 
     /**
+     * Returns the email address of the group containing emails of console users.
+     *
+     * <p>This group should be granted the {@code roles/iap.httpsResourceAccessor} role.
+     */
+    @Provides
+    @Config("gSuiteConsoleUserGroupEmailAddress")
+    public static Optional<String> provideGSuiteConsoleUserGroupEmailAddress(
+        RegistryConfigSettings config) {
+      return Optional.ofNullable(Strings.emptyToNull(config.gSuite.consoleUserGroupEmailAddress));
+    }
+
+    /**
      * Returns the email address(es) that notifications of registrar and/or registrar contact
      * updates should be sent to, or the empty list if updates should not be sent.
      *
-     * @see google.registry.ui.server.registrar.RegistrarSettingsAction
+     * @see google.registry.ui.server.SendEmailUtils
      */
     @Provides
     @Config("registrarChangesNotificationEmailAddresses")
@@ -699,6 +678,17 @@ public final class RegistryConfig {
     }
 
     /**
+     * Returns origin part of the URL of the billing invoice file
+     *
+     * @see google.registry.beam.billing.InvoicingPipeline
+     */
+    @Provides
+    @Config("billingInvoiceOriginUrl")
+    public static String provideBillingInvoiceOriginUrl(RegistryConfigSettings config) {
+      return config.billing.billingInvoiceOriginUrl;
+    }
+
+    /**
      * Returns whether or not we should publish invoices to partners automatically by default.
      *
      * @see google.registry.reporting.billing.BillingModule
@@ -721,6 +711,18 @@ public final class RegistryConfig {
       return config.billing.invoiceEmailRecipients.stream()
           .map(RegistryConfig::parseEmailAddress)
           .collect(toImmutableList());
+    }
+
+    /**
+     * Returns an optional return email address that overrides the default {@code reply-to} address
+     * in outgoing invoicing email messages.
+     */
+    @Provides
+    @Config("invoiceReplyToEmailAddress")
+    public static Optional<InternetAddress> provideInvoiceReplyToEmailAddress(
+        RegistryConfigSettings config) {
+      return Optional.ofNullable(config.billing.invoiceReplyToEmailAddress)
+          .map(RegistryConfig::parseEmailAddress);
     }
 
     /**
@@ -833,17 +835,6 @@ public final class RegistryConfig {
     }
 
     /**
-     * Whether or not the registrar console is enabled.
-     *
-     * @see google.registry.ui.server.registrar.ConsoleUiAction
-     */
-    @Provides
-    @Config("registrarConsoleEnabled")
-    public static boolean provideRegistrarConsoleEnabled() {
-      return true;
-    }
-
-    /**
      * Maximum amount of time for syncing a spreadsheet, before killing.
      *
      * @see google.registry.export.sheet.SyncRegistrarsSheetAction
@@ -865,6 +856,17 @@ public final class RegistryConfig {
     @Config("sheetRegistrarId")
     public static Optional<String> provideSheetRegistrarId(RegistryConfigSettings config) {
       return Optional.ofNullable(config.misc.sheetExportId);
+    }
+
+    /**
+     * Returns the desired delay between outgoing emails when sending in bulk.
+     *
+     * <p>Gmail apparently has unpublished limits on peak throughput over short period.
+     */
+    @Provides
+    @Config("emailThrottleDuration")
+    public static Duration provideEmailThrottleSeconds(RegistryConfigSettings config) {
+      return Duration.standardSeconds(config.misc.emailThrottleSeconds);
     }
 
     /**
@@ -960,7 +962,7 @@ public final class RegistryConfig {
     }
 
     /**
-     * Number of times to retry a GAE operation when {@code TransientFailureException} is thrown.
+     * Number of times to retry an operation when {@code TransientFailureException} is thrown.
      *
      * <p>The number of milliseconds it'll sleep before giving up is {@code (2^n - 2) * 100}.
      *
@@ -976,17 +978,6 @@ public final class RegistryConfig {
     }
 
     /**
-     * Amount of time public HTTP proxies are permitted to cache our WHOIS responses.
-     *
-     * @see google.registry.whois.WhoisHttpAction
-     */
-    @Provides
-    @Config("whoisHttpExpires")
-    public static Duration provideWhoisHttpExpires() {
-      return Duration.standardDays(1);
-    }
-
-    /**
      * Maximum number of results to return for an RDAP search query
      *
      * @see google.registry.rdap.RdapActionBase
@@ -998,25 +989,16 @@ public final class RegistryConfig {
     }
 
     /**
-     * Redaction text for email address in WHOIS
+     * Whether to include optional RDAP history results in domain responses.
      *
-     * @see google.registry.whois.WhoisResponse
+     * <p>The RDAP Response Profile (Feb 2024) section 2.3 specifies that while registration and
+     * expiration events are required, other types are optional. In an effort to reduce database
+     * load, we (by default) omit the optional events.
      */
     @Provides
-    @Config("whoisRedactedEmailText")
-    public static String provideWhoisRedactedEmailText(RegistryConfigSettings config) {
-      return config.registryPolicy.whoisRedactedEmailText;
-    }
-
-    /**
-     * Disclaimer displayed at the end of WHOIS query results.
-     *
-     * @see google.registry.whois.WhoisResponse
-     */
-    @Provides
-    @Config("whoisDisclaimer")
-    public static String provideWhoisDisclaimer(RegistryConfigSettings config) {
-      return config.registryPolicy.whoisDisclaimer;
+    @Config("rdapIncludeOptionalHistoryResults")
+    public static boolean provideRdapIncludeOptionalHistoryResults() {
+      return false;
     }
 
     /**
@@ -1056,18 +1038,6 @@ public final class RegistryConfig {
     }
 
     /**
-     * The global automatic transfer length for contacts. After this amount of time has elapsed, the
-     * transfer is automatically approved.
-     *
-     * @see google.registry.flows.contact.ContactTransferRequestFlow
-     */
-    @Provides
-    @Config("contactAutomaticTransferLength")
-    public static Duration provideContactAutomaticTransferLength(RegistryConfigSettings config) {
-      return Duration.standardDays(config.registryPolicy.contactAutomaticTransferDays);
-    }
-
-    /**
      * Returns the maximum number of entities that can be checked at one time in an EPP check flow.
      */
     @Provides
@@ -1088,27 +1058,9 @@ public final class RegistryConfig {
     }
 
     @Provides
-    @Config("activeKeyring")
-    public static String provideKeyring(RegistryConfigSettings config) {
-      return config.keyring.activeKeyring;
-    }
-
-    @Provides
     @Config("customLogicFactoryClass")
     public static String provideCustomLogicFactoryClass(RegistryConfigSettings config) {
       return config.registryPolicy.customLogicFactoryClass;
-    }
-
-    @Provides
-    @Config("whoisCommandFactoryClass")
-    public static String provideWhoisCommandFactoryClass(RegistryConfigSettings config) {
-      return config.registryPolicy.whoisCommandFactoryClass;
-    }
-
-    @Provides
-    @Config("allocationTokenCustomLogicClass")
-    public static String provideAllocationTokenCustomLogicClass(RegistryConfigSettings config) {
-      return config.registryPolicy.allocationTokenCustomLogicClass;
     }
 
     @Provides
@@ -1152,44 +1104,6 @@ public final class RegistryConfig {
     }
 
     /**
-     * Provides the OAuth scopes that authentication logic should detect on access tokens.
-     *
-     * <p>This list should be a superset of the required OAuth scope set provided below. Note that
-     * ideally, this setting would not be required and all scopes on an access token would be
-     * detected automatically, but that is not the case due to the way {@code OAuthService} works.
-     *
-     * <p>This is an independent setting from the required OAuth scopes (below) to support use cases
-     * where certain actions require some additional scope (e.g. access to a user's Google Drive)
-     * but that scope shouldn't be required for authentication alone; in that case the Drive scope
-     * would be specified only for this setting, allowing that action to check for its presence.
-     */
-    @Provides
-    @Config("availableOauthScopes")
-    public static ImmutableSet<String> provideAvailableOauthScopes(RegistryConfigSettings config) {
-      return ImmutableSet.copyOf(config.auth.availableOauthScopes);
-    }
-
-    /**
-     * Provides the OAuth scopes that are required for authenticating successfully.
-     *
-     * <p>This set contains the scopes which must be present to authenticate a user. It should be a
-     * subset of the scopes we request from the OAuth interface, provided above.
-     *
-     * <p>If we feel the need, we could define additional fixed scopes, similar to the Java remote
-     * API, which requires at least one of:
-     *
-     * <ul>
-     *   <li>{@code https://www.googleapis.com/auth/appengine.apis}
-     *   <li>{@code https://www.googleapis.com/auth/cloud-platform}
-     * </ul>
-     */
-    @Provides
-    @Config("requiredOauthScopes")
-    public static ImmutableSet<String> provideRequiredOauthScopes(RegistryConfigSettings config) {
-      return ImmutableSet.copyOf(config.auth.requiredOauthScopes);
-    }
-
-    /**
      * Provides service account email addresses allowed to authenticate with the app at {@link
      * google.registry.request.auth.AuthSettings.AuthLevel#APP} level.
      */
@@ -1198,13 +1112,6 @@ public final class RegistryConfig {
     public static ImmutableSet<String> provideAllowedServiceAccountEmails(
         RegistryConfigSettings config) {
       return ImmutableSet.copyOf(config.auth.allowedServiceAccountEmails);
-    }
-
-    /** Provides the allowed OAuth client IDs (could be multibinding). */
-    @Provides
-    @Config("allowedOauthClientIds")
-    public static ImmutableSet<String> provideAllowedOauthClientIds(RegistryConfigSettings config) {
-      return ImmutableSet.copyOf(config.auth.allowedOauthClientIds);
     }
 
     @Provides
@@ -1359,12 +1266,6 @@ public final class RegistryConfig {
     }
 
     @Provides
-    @Config("minMonthsBeforeWipeOut")
-    public static int provideMinMonthsBeforeWipeOut(RegistryConfigSettings config) {
-      return config.contactHistory.minMonthsBeforeWipeOut;
-    }
-
-    @Provides
     @Config("jdbcBatchSize")
     public static int provideHibernateJdbcBatchSize(RegistryConfigSettings config) {
       return config.hibernate.jdbcBatchSize;
@@ -1412,6 +1313,156 @@ public final class RegistryConfig {
       return config.bulkPricingPackageMonitoring.bulkPricingPackageDomainLimitUpgradeEmailBody;
     }
 
+    @Provides
+    @Config("bsaGcsBucket")
+    public static String provideBsaGcsBucket(@Config("projectId") String projectId) {
+      return projectId + "-bsa";
+    }
+
+    @Provides
+    @Config("bsaChecksumAlgorithm")
+    public static String provideBsaChecksumAlgorithm(RegistryConfigSettings config) {
+      return config.bsa.bsaChecksumAlgorithm;
+    }
+
+    @Provides
+    @Config("bsaLockLeaseExpiry")
+    public static Duration provideBsaLockLeaseExpiry(RegistryConfigSettings config) {
+      return Duration.standardMinutes(config.bsa.bsaLockLeaseExpiryMinutes);
+    }
+
+    /** Returns the desired interval between successive BSA downloads. */
+    @Provides
+    @Config("bsaDownloadInterval")
+    public static Duration provideBsaDownloadInterval(RegistryConfigSettings config) {
+      return Duration.standardMinutes(config.bsa.bsaDownloadIntervalMinutes);
+    }
+
+    /**
+     * Returns the maximum period when a BSA download can be skipped due to the checksum-based
+     * equality check with the previous download.
+     */
+    @Provides
+    @Config("bsaMaxNopInterval")
+    public static Duration provideBsaMaxNopInterval(RegistryConfigSettings config) {
+      return Duration.standardHours(config.bsa.bsaMaxNopIntervalHours);
+    }
+
+    @Provides
+    @Config("bsaTxnBatchSize")
+    public static int provideBsaTxnBatchSize(RegistryConfigSettings config) {
+      return config.bsa.bsaTxnBatchSize;
+    }
+
+    @Provides
+    @Config("domainCreateTxnCommitTimeLag")
+    public static Duration provideDomainCreateTxnCommitTimeLag(RegistryConfigSettings config) {
+      return Duration.standardSeconds(config.bsa.domainCreateTxnCommitTimeLagSeconds);
+    }
+
+    @Provides
+    @Config("bsaValidationMaxStaleness")
+    public static Duration provideBsaValidationMaxStaleness(RegistryConfigSettings config) {
+      return Duration.standardSeconds(config.bsa.bsaValidationMaxStalenessSeconds);
+    }
+
+    @Provides
+    @Config("bsaAuthUrl")
+    public static String provideBsaAuthUrl(RegistryConfigSettings config) {
+      return config.bsa.authUrl;
+    }
+
+    @Provides
+    @Config("bsaAuthTokenExpiry")
+    public static Duration provideBsaAuthTokenExpiry(RegistryConfigSettings config) {
+      return Duration.standardSeconds(config.bsa.authTokenExpirySeconds);
+    }
+
+    @Provides
+    @Config("bsaDataUrls")
+    public static ImmutableMap<String, String> provideBsaDataUrls(RegistryConfigSettings config) {
+      return ImmutableMap.copyOf(config.bsa.dataUrls);
+    }
+
+    /** Provides the BSA Http endpoint for reporting order processing status. */
+    @Provides
+    @Config("bsaOrderStatusUrl")
+    public static String provideBsaOrderStatusUrls(RegistryConfigSettings config) {
+      return config.bsa.orderStatusUrl;
+    }
+
+    /** Provides the BSA Http endpoint for reporting new unblockable domains. */
+    @Provides
+    @Config("bsaAddUnblockableDomainsUrl")
+    public static String provideBsaAddUnblockableDomainsUrls(RegistryConfigSettings config) {
+      return String.format("%s?%s", config.bsa.unblockableDomainsUrl, "action=add");
+    }
+
+    /** Provides the BSA Http endpoint for reporting domains that have become blockable. */
+    @Provides
+    @Config("bsaRemoveUnblockableDomainsUrl")
+    public static String provideBsaRemoveUnblockableDomainsUrls(RegistryConfigSettings config) {
+      return String.format("%s?%s", config.bsa.unblockableDomainsUrl, "action=remove");
+    }
+
+    @Provides
+    @Config("bsaUploadUnavailableDomainsUrl")
+    public static String provideBsaUploadUnavailableDomainsUrl(RegistryConfigSettings config) {
+      return config.bsa.uploadUnavailableDomainsUrl;
+    }
+
+    /**
+     * Returns the URL we send HTTP requests for MoSAPI.
+     *
+     * @see MosApiClient
+     */
+    @Provides
+    @Config("mosapiServiceUrl")
+    public static String provideMosapiServiceUrl(RegistryConfigSettings config) {
+      return config.mosapi.serviceUrl;
+    }
+
+    /**
+     * Returns the entityType we send HTTP requests for MoSAPI.
+     *
+     * @see MosApiClient
+     */
+    @Provides
+    @Config("mosapiEntityType")
+    public static String provideMosapiEntityType(RegistryConfigSettings config) {
+      return config.mosapi.entityType;
+    }
+
+    @Provides
+    @Config("mosapiTlsCertSecretName")
+    public static String provideMosapiTlsCertSecretName(RegistryConfigSettings config) {
+      return config.mosapi.tlsCertSecretName;
+    }
+
+    @Provides
+    @Config("mosapiTlsKeySecretName")
+    public static String provideMosapiTlsKeySecretName(RegistryConfigSettings config) {
+      return config.mosapi.tlsKeySecretName;
+    }
+
+    @Provides
+    @Config("mosapiTlds")
+    public static ImmutableSet<String> provideMosapiTlds(RegistryConfigSettings config) {
+      return ImmutableSet.copyOf(config.mosapi.tlds);
+    }
+
+    @Provides
+    @Config("mosapiServices")
+    public static ImmutableSet<String> provideMosapiServices(RegistryConfigSettings config) {
+      return ImmutableSet.copyOf(config.mosapi.services);
+    }
+
+    @Provides
+    @Config("mosapiTldThreadCount")
+    public static int provideMosapiTldThreads(RegistryConfigSettings config) {
+      return config.mosapi.tldThreadCount;
+    }
+
     private static String formatComments(String text) {
       return Splitter.on('\n').omitEmptyStrings().trimResults().splitToList(text).stream()
           .map(s -> "# " + s)
@@ -1419,7 +1470,7 @@ public final class RegistryConfig {
     }
   }
 
-  /** Returns the App Engine project ID, which is based off the environment name. */
+  /** Returns the project ID, which is based off the environment name. */
   public static String getProjectId() {
     return CONFIG_SETTINGS.get().gcpProject.projectId;
   }
@@ -1437,40 +1488,12 @@ public final class RegistryConfig {
     return CONFIG_SETTINGS.get().gcpProject.isLocal;
   }
 
-  /**
-   * Returns the address of the Nomulus app default HTTP server.
-   *
-   * <p>This is used by the {@code nomulus} tool to connect to the App Engine remote API.
-   */
-  public static URL getDefaultServer() {
-    return makeUrl(CONFIG_SETTINGS.get().gcpProject.defaultServiceUrl);
+  public static String getBaseDomain() {
+    return CONFIG_SETTINGS.get().gcpProject.baseDomain;
   }
 
-  /**
-   * Returns the address of the Nomulus app backend HTTP server.
-   *
-   * <p>This is used by the {@code nomulus} tool to connect to the App Engine remote API.
-   */
-  public static URL getBackendServer() {
-    return makeUrl(CONFIG_SETTINGS.get().gcpProject.backendServiceUrl);
-  }
-
-  /**
-   * Returns the address of the Nomulus app tools HTTP server.
-   *
-   * <p>This is used by the {@code nomulus} tool to connect to the App Engine remote API.
-   */
-  public static URL getToolsServer() {
-    return makeUrl(CONFIG_SETTINGS.get().gcpProject.toolsServiceUrl);
-  }
-
-  /**
-   * Returns the address of the Nomulus app pubapi HTTP server.
-   *
-   * <p>This is used by the {@code nomulus} tool to connect to the App Engine remote API.
-   */
-  public static URL getPubapiServer() {
-    return makeUrl(CONFIG_SETTINGS.get().gcpProject.pubapiServiceUrl);
+  public static URL getServiceUrl(Service service) {
+    return makeUrl(String.format("https://%s.%s", service.getServiceId(), getBaseDomain()));
   }
 
   /** Returns the amount of time a singleton should be cached, before expiring. */
@@ -1536,12 +1559,7 @@ public final class RegistryConfig {
     return CONFIG_SETTINGS.get().gSuite.outgoingEmailDisplayName;
   }
 
-  /**
-   * Returns default WHOIS server to use when {@code Registrar#getWhoisServer()} is {@code null}.
-   *
-   * @see "google.registry.whois.DomainWhoisResponse"
-   * @see "google.registry.whois.RegistrarWhoisResponse"
-   */
+  /** Returns default WHOIS server to use when {@code Registrar#getWhoisServer()} is null. */
   public static String getDefaultRegistrarWhoisServer() {
     return CONFIG_SETTINGS.get().registryPolicy.defaultRegistrarWhoisServer;
   }
@@ -1551,9 +1569,9 @@ public final class RegistryConfig {
     return CONFIG_SETTINGS.get().hibernate.connectionIsolation;
   }
 
-  /** Returns true if per-transaction isolation level is enabled. */
-  public static boolean getHibernatePerTransactionIsolationEnabled() {
-    return CONFIG_SETTINGS.get().hibernate.perTransactionIsolation;
+  /** Returns true if nested calls to {@code tm().transact()} are allowed. */
+  public static boolean getHibernateAllowNestedTransactions() {
+    return CONFIG_SETTINGS.get().hibernate.allowNestedTransactions;
   }
 
   /** Returns true if hibernate.show_sql is enabled. */
@@ -1606,19 +1624,39 @@ public final class RegistryConfig {
     return CONFIG_SETTINGS.get().hibernate.jdbcFetchSize;
   }
 
-  /** Returns the roid suffix to be used for the roids of all contacts and hosts. */
-  public static String getContactAndHostRoidSuffix() {
+  /** Returns the roid suffix to be used for the roids of all hosts. */
+  public static String getHostRoidSuffix() {
     return CONFIG_SETTINGS.get().registryPolicy.contactAndHostRoidSuffix;
   }
 
-  /** Returns the global automatic transfer length for contacts. */
-  public static Duration getContactAutomaticTransferLength() {
-    return Duration.standardDays(CONFIG_SETTINGS.get().registryPolicy.contactAutomaticTransferDays);
-  }
 
   /** A discount for all sunrise domain creates, between 0.0 (no discount) and 1.0 (free). */
   public static double getSunriseDomainCreateDiscount() {
     return CONFIG_SETTINGS.get().registryPolicy.sunriseDomainCreateDiscount;
+  }
+
+  /**
+   * List of registrars for which we include a promotional price on domain checks if configured.
+   *
+   * <p>In these cases, when a default promotion is running for the domain+registrar combination in
+   * question (a DEFAULT_PROMO token is set on the TLD), the standard non-promotional price will be
+   * returned for that domain as the standard create price. We will then add an additional fee check
+   * response with the actual promotional price and a "STANDARD PROMOTION" class.
+   */
+  public static ImmutableSet<String> getTieredPricingPromotionRegistrarIds() {
+    return ImmutableSet.copyOf(
+        CONFIG_SETTINGS.get().registryPolicy.tieredPricingPromotionRegistrarIds);
+  }
+
+  /**
+   * Set of registrars for which we do not send poll messages on standard domain deletion.
+   *
+   * <p>For these registrars we won't send a poll message in order to avoid database contention. See
+   * b/379331882 for more details.
+   */
+  public static ImmutableSet<String> getNoPollMessageOnDeletionRegistrarIds() {
+    return ImmutableSet.copyOf(
+        CONFIG_SETTINGS.get().registryPolicy.noPollMessageOnDeletionRegistrarIds);
   }
 
   /**
@@ -1630,8 +1668,6 @@ public final class RegistryConfig {
   @VisibleForTesting
   public static final Supplier<RegistryConfigSettings> CONFIG_SETTINGS =
       memoize(RegistryConfig::getConfigSettings);
-
-
 
   private static InternetAddress parseEmailAddress(String email) {
     try {

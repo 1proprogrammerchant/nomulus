@@ -16,20 +16,20 @@ package google.registry.flows.domain;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
-import static com.google.common.base.Predicates.equalTo;
 import static com.google.common.base.Strings.emptyToNull;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
-import static com.google.common.collect.ImmutableSetMultimap.toImmutableSetMultimap;
-import static com.google.common.collect.Iterables.any;
 import static com.google.common.collect.Sets.difference;
 import static com.google.common.collect.Sets.intersection;
 import static com.google.common.collect.Sets.union;
+import static google.registry.bsa.persistence.BsaLabelUtils.isLabelBlocked;
 import static google.registry.model.domain.Domain.MAX_REGISTRATION_YEARS;
+import static google.registry.model.domain.token.AllocationToken.TokenType.REGISTER_BSA;
 import static google.registry.model.tld.Tld.TldState.GENERAL_AVAILABILITY;
 import static google.registry.model.tld.Tld.TldState.PREDELEGATION;
 import static google.registry.model.tld.Tld.TldState.QUIET_PERIOD;
 import static google.registry.model.tld.Tld.TldState.START_DATE_SUNRISE;
+import static google.registry.model.tld.Tld.isEnrolledWithBsa;
 import static google.registry.model.tld.Tlds.findTldForName;
 import static google.registry.model.tld.Tlds.getTlds;
 import static google.registry.model.tld.label.ReservationType.ALLOWED_IN_SUNRISE;
@@ -39,16 +39,13 @@ import static google.registry.model.tld.label.ReservationType.RESERVED_FOR_ANCHO
 import static google.registry.model.tld.label.ReservationType.RESERVED_FOR_SPECIFIC_USE;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
 import static google.registry.pricing.PricingEngineProxy.isDomainPremium;
-import static google.registry.util.CollectionUtils.isNullOrEmpty;
 import static google.registry.util.CollectionUtils.nullToEmpty;
 import static google.registry.util.DateTimeUtils.END_OF_TIME;
 import static google.registry.util.DateTimeUtils.isAtOrAfter;
 import static google.registry.util.DateTimeUtils.leapSafeAddYears;
 import static google.registry.util.DomainNameUtils.ACE_PREFIX;
-import static java.util.Comparator.comparing;
 import static java.util.stream.Collectors.joining;
 
-import com.google.common.base.Ascii;
 import com.google.common.base.CharMatcher;
 import com.google.common.base.Joiner;
 import com.google.common.base.Splitter;
@@ -57,14 +54,10 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableMultimap;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Maps;
-import com.google.common.collect.Multimap;
-import com.google.common.collect.Multimaps;
 import com.google.common.collect.Sets;
 import com.google.common.collect.Streams;
 import com.google.common.net.InternetDomainName;
 import google.registry.flows.EppException;
-import google.registry.flows.EppException.AssociationProhibitsOperationException;
 import google.registry.flows.EppException.AuthorizationErrorException;
 import google.registry.flows.EppException.CommandUseErrorException;
 import google.registry.flows.EppException.ObjectDoesNotExistException;
@@ -74,33 +67,28 @@ import google.registry.flows.EppException.ParameterValueSyntaxErrorException;
 import google.registry.flows.EppException.RequiredParameterMissingException;
 import google.registry.flows.EppException.StatusProhibitsOperationException;
 import google.registry.flows.EppException.UnimplementedOptionException;
-import google.registry.flows.domain.DomainPricingLogic.AllocationTokenInvalidForPremiumNameException;
-import google.registry.flows.domain.token.AllocationTokenFlowUtils;
 import google.registry.flows.exceptions.ResourceHasClientUpdateProhibitedException;
 import google.registry.model.EppResource;
 import google.registry.model.billing.BillingBase.Flag;
 import google.registry.model.billing.BillingBase.Reason;
 import google.registry.model.billing.BillingRecurrence;
-import google.registry.model.contact.Contact;
-import google.registry.model.domain.DesignatedContact;
-import google.registry.model.domain.DesignatedContact.Type;
 import google.registry.model.domain.Domain;
 import google.registry.model.domain.DomainCommand.Create;
 import google.registry.model.domain.DomainCommand.CreateOrUpdate;
 import google.registry.model.domain.DomainCommand.InvalidReferencesException;
 import google.registry.model.domain.DomainCommand.Update;
 import google.registry.model.domain.DomainHistory;
-import google.registry.model.domain.ForeignKeyedDesignatedContact;
 import google.registry.model.domain.Period;
+import google.registry.model.domain.Period.Unit;
 import google.registry.model.domain.fee.BaseFee;
 import google.registry.model.domain.fee.BaseFee.FeeType;
 import google.registry.model.domain.fee.Credit;
 import google.registry.model.domain.fee.Fee;
 import google.registry.model.domain.fee.FeeQueryCommandExtensionItem;
-import google.registry.model.domain.fee.FeeQueryCommandExtensionItem.CommandName;
 import google.registry.model.domain.fee.FeeQueryResponseExtensionItem;
 import google.registry.model.domain.fee.FeeTransformCommandExtension;
 import google.registry.model.domain.fee.FeeTransformResponseExtension;
+import google.registry.model.domain.feestdv1.FeeCheckResponseExtensionItemStdV1;
 import google.registry.model.domain.launch.LaunchCreateExtension;
 import google.registry.model.domain.launch.LaunchExtension;
 import google.registry.model.domain.launch.LaunchNotice;
@@ -118,7 +106,7 @@ import google.registry.model.domain.token.AllocationToken.RegistrationBehavior;
 import google.registry.model.eppcommon.StatusValue;
 import google.registry.model.eppoutput.EppResponse.ResponseExtension;
 import google.registry.model.host.Host;
-import google.registry.model.poll.PollMessage;
+import google.registry.model.poll.PollMessage.Autorenew;
 import google.registry.model.registrar.Registrar;
 import google.registry.model.registrar.Registrar.State;
 import google.registry.model.reporting.DomainTransactionRecord;
@@ -135,11 +123,8 @@ import google.registry.tldconfig.idn.IdnLabelValidator;
 import google.registry.tools.DigestType;
 import google.registry.util.Idn;
 import java.math.BigDecimal;
-import java.util.Collection;
 import java.util.Comparator;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.Set;
@@ -203,7 +188,7 @@ public class DomainFlowUtils {
     if (parts.size() <= 1) {
       throw new BadDomainNamePartsCountException();
     }
-    if (any(parts, equalTo(""))) {
+    if (parts.stream().anyMatch(String::isEmpty)) {
       throw new EmptyDomainNamePartException();
     }
     validateFirstLabel(parts.get(0));
@@ -212,7 +197,7 @@ public class DomainFlowUtils {
       throw new DomainNameExistsAsTldException();
     }
     Optional<InternetDomainName> tldParsed = findTldForName(domainName);
-    if (!tldParsed.isPresent()) {
+    if (tldParsed.isEmpty()) {
       throw new TldDoesNotExistException(domainName.parent().toString());
     }
     if (domainName.parts().size() != tldParsed.get().parts().size() + 1) {
@@ -221,7 +206,7 @@ public class DomainFlowUtils {
     return domainName;
   }
 
-  private static void validateFirstLabel(String firstLabel) throws EppException {
+  public static void validateFirstLabel(String firstLabel) throws EppException {
     if (firstLabel.length() > MAX_LABEL_SIZE) {
       throw new DomainLabelTooLongException();
     }
@@ -253,10 +238,30 @@ public class DomainFlowUtils {
     Optional<String> idnTableName =
         IDN_LABEL_VALIDATOR.findValidIdnTableForTld(
             domainName.parts().get(0), domainName.parent().toString());
-    if (!idnTableName.isPresent()) {
+    if (idnTableName.isEmpty()) {
       throw new InvalidIdnDomainLabelException();
     }
     return idnTableName.get();
+  }
+
+  /**
+   * Verifies that the {@code domainLabel} is not blocked by any BSA block label for the given
+   * {@code tld} at the specified time.
+   */
+  public static void verifyNotBlockedByBsa(
+      InternetDomainName domainName,
+      Tld tld,
+      DateTime now,
+      Optional<AllocationToken> allocationToken)
+      throws DomainLabelBlockedByBsaException {
+    if (!isRegisterBsaCreate(domainName, allocationToken)
+        && isBlockedByBsa(domainName.parts().get(0), tld, now)) {
+      throw new DomainLabelBlockedByBsaException();
+    }
+  }
+
+  public static boolean isBlockedByBsa(String domainLabel, Tld tld, DateTime now) {
+    return isEnrolledWithBsa(tld, now) && isLabelBlocked(domainLabel);
   }
 
   /** Returns whether a given domain create request is for a valid anchor tenant. */
@@ -294,10 +299,19 @@ public class DomainFlowUtils {
         && token.get().getDomainName().get().equals(domainName.toString());
   }
 
+  /** Returns whether a given domain create request may bypass the BSA block check. */
+  public static boolean isRegisterBsaCreate(
+      InternetDomainName domainName, Optional<AllocationToken> token) {
+    return token.isPresent()
+        && token.get().getTokenType().equals(REGISTER_BSA)
+        && token.get().getDomainName().isPresent()
+        && token.get().getDomainName().get().equals(domainName.toString());
+  }
+
   /** Check if the registrar running the flow has access to the TLD in question. */
   public static void checkAllowedAccessToTld(String registrarId, String tld) throws EppException {
     if (!Registrar.loadByRegistrarIdCached(registrarId).get().getAllowedTlds().contains(tld)) {
-      throw new DomainFlowUtils.NotAuthorizedForTldException(tld);
+      throw new NotAuthorizedForTldException(tld);
     }
   }
 
@@ -312,7 +326,7 @@ public class DomainFlowUtils {
         .get()
         .getBillingAccountMap()
         .containsKey(tld.getCurrency())) {
-      throw new DomainFlowUtils.MissingBillingAccountMapException(tld.getCurrency());
+      throw new MissingBillingAccountMapException(tld.getCurrency());
     }
   }
 
@@ -336,7 +350,7 @@ public class DomainFlowUtils {
       }
       ImmutableList<DomainDsData> invalidDigestTypes =
           dsData.stream()
-              .filter(ds -> !DigestType.fromWireValue(ds.getDigestType()).isPresent())
+              .filter(ds -> DigestType.fromWireValue(ds.getDigestType()).isEmpty())
               .collect(toImmutableList());
       if (!invalidDigestTypes.isEmpty()) {
         throw new InvalidDsRecordException(
@@ -373,38 +387,20 @@ public class DomainFlowUtils {
 
   /** We only allow specifying years in a period. */
   static Period verifyUnitIsYears(Period period) throws EppException {
-    if (!checkNotNull(period).getUnit().equals(Period.Unit.YEARS)) {
+    if (!checkNotNull(period).getUnit().equals(Unit.YEARS)) {
       throw new BadPeriodUnitException();
     }
     return period;
   }
 
-  /** Verify that no linked resources have disallowed statuses. */
-  static void verifyNotInPendingDelete(
-      Set<DesignatedContact> contacts, VKey<Contact> registrant, Set<VKey<Host>> nameservers)
-      throws EppException {
-    ImmutableList.Builder<VKey<? extends EppResource>> keysToLoad = new ImmutableList.Builder<>();
-    contacts.stream().map(DesignatedContact::getContactKey).forEach(keysToLoad::add);
-    Optional.ofNullable(registrant).ifPresent(keysToLoad::add);
-    keysToLoad.addAll(nameservers);
-    verifyNotInPendingDelete(EppResource.loadCached(keysToLoad.build()).values());
-  }
-
-  private static void verifyNotInPendingDelete(Iterable<EppResource> resources)
-      throws EppException {
-    for (EppResource resource : resources) {
+  /** Verify that no linked nameservers have disallowed statuses. */
+  static void verifyNotInPendingDelete(ImmutableSet<VKey<Host>> nameservers)
+      throws StatusProhibitsOperationException {
+    for (EppResource resource :
+        EppResource.loadByCacheIfEnabled(ImmutableSet.copyOf(nameservers)).values()) {
       if (resource.getStatusValues().contains(StatusValue.PENDING_DELETE)) {
         throw new LinkedResourceInPendingDeleteProhibitsOperationException(
             resource.getForeignKey());
-      }
-    }
-  }
-
-  static void validateContactsHaveTypes(Set<DesignatedContact> contacts)
-      throws ParameterValuePolicyErrorException {
-    for (DesignatedContact contact : contacts) {
-      if (contact.getType() == null) {
-        throw new MissingContactTypeException();
       }
     }
   }
@@ -420,61 +416,6 @@ public class DomainFlowUtils {
     if (count > MAX_NAMESERVERS_PER_DOMAIN) {
       throw new TooManyNameserversException(
           String.format("Only %d nameservers are allowed per domain", MAX_NAMESERVERS_PER_DOMAIN));
-    }
-  }
-
-  static void validateNoDuplicateContacts(Set<DesignatedContact> contacts)
-      throws ParameterValuePolicyErrorException {
-    ImmutableMultimap<Type, VKey<Contact>> contactsByType =
-        contacts.stream()
-            .collect(
-                toImmutableSetMultimap(
-                    DesignatedContact::getType, DesignatedContact::getContactKey));
-
-    // If any contact type has multiple contacts:
-    if (contactsByType.asMap().values().stream().anyMatch(v -> v.size() > 1)) {
-      // Find the duplicates.
-      Map<Type, Collection<VKey<Contact>>> dupeKeysMap =
-          Maps.filterEntries(contactsByType.asMap(), e -> e.getValue().size() > 1);
-      ImmutableList<VKey<Contact>> dupeKeys =
-          dupeKeysMap.values().stream().flatMap(Collection::stream).collect(toImmutableList());
-      // Load the duplicates in one batch.
-      Map<VKey<? extends Contact>, Contact> dupeContacts = tm().loadByKeys(dupeKeys);
-      ImmutableMultimap.Builder<Type, VKey<Contact>> typesMap = new ImmutableMultimap.Builder<>();
-      dupeKeysMap.forEach(typesMap::putAll);
-      // Create an error message showing the type and contact IDs of the duplicates.
-      throw new DuplicateContactForRoleException(
-          Multimaps.transformValues(typesMap.build(), key -> dupeContacts.get(key).getContactId()));
-    }
-  }
-
-  static void validateRequiredContactsPresent(
-      @Nullable VKey<Contact> registrant, Set<DesignatedContact> contacts)
-      throws RequiredParameterMissingException {
-    if (registrant == null) {
-      throw new MissingRegistrantException();
-    }
-
-    Set<Type> roles = new HashSet<>();
-    for (DesignatedContact contact : contacts) {
-      roles.add(contact.getType());
-    }
-    if (!roles.contains(Type.ADMIN)) {
-      throw new MissingAdminContactException();
-    }
-    if (!roles.contains(Type.TECH)) {
-      throw new MissingTechnicalContactException();
-    }
-  }
-
-  static void validateRegistrantAllowedOnTld(String tld, String registrantContactId)
-      throws RegistrantNotAllowedException {
-    ImmutableSet<String> allowedRegistrants = Tld.get(tld).getAllowedRegistrantContactIds();
-    // Empty allow list or null registrantContactId are ignored.
-    if (registrantContactId != null
-        && !allowedRegistrants.isEmpty()
-        && !allowedRegistrants.contains(registrantContactId)) {
-      throw new RegistrantNotAllowedException(registrantContactId);
     }
   }
 
@@ -500,9 +441,9 @@ public class DomainFlowUtils {
   private static final ImmutableSet<ReservationType> RESERVED_TYPES =
       ImmutableSet.of(RESERVED_FOR_SPECIFIC_USE, RESERVED_FOR_ANCHOR_TENANT, FULLY_BLOCKED);
 
-  static boolean isReserved(InternetDomainName domainName, boolean isSunrise) {
+  public static boolean isReserved(InternetDomainName domainName, boolean isSunrise) {
     ImmutableSet<ReservationType> types = getReservationTypes(domainName);
-    return !Sets.intersection(types, RESERVED_TYPES).isEmpty()
+    return !intersection(types, RESERVED_TYPES).isEmpty()
         || !(isSunrise || intersection(TYPES_ALLOWED_FOR_CREATE_ONLY_IN_SUNRISE, types).isEmpty());
   }
 
@@ -562,18 +503,18 @@ public class DomainFlowUtils {
         .setFlags(ImmutableSet.of(Flag.AUTO_RENEW))
         .setTargetId(domain.getDomainName())
         .setRegistrarId(domain.getCurrentSponsorRegistrarId())
-        .setEventTime(domain.getRegistrationExpirationTime());
+        .setEventTime(domain.getRegistrationExpirationDateTime());
   }
 
   /**
    * Fills in a builder with the data needed for an autorenew poll message for this domain. This
    * does not copy over the id of the current autorenew poll message.
    */
-  public static PollMessage.Autorenew.Builder newAutorenewPollMessage(Domain domain) {
-    return new PollMessage.Autorenew.Builder()
+  public static Autorenew.Builder newAutorenewPollMessage(Domain domain) {
+    return new Autorenew.Builder()
         .setTargetId(domain.getDomainName())
         .setRegistrarId(domain.getCurrentSponsorRegistrarId())
-        .setEventTime(domain.getRegistrationExpirationTime())
+        .setEventTime(domain.getRegistrationExpirationDateTime())
         .setMsg("Domain was auto-renewed.");
   }
 
@@ -591,7 +532,7 @@ public class DomainFlowUtils {
       BillingRecurrence existingBillingRecurrence,
       DateTime newEndTime,
       @Nullable HistoryEntryId historyId) {
-    Optional<PollMessage.Autorenew> autorenewPollMessage =
+    Optional<Autorenew> autorenewPollMessage =
         tm().loadByKeyIfPresent(domain.getAutorenewPollMessage());
 
     // Construct an updated autorenew poll message. If the autorenew poll message no longer exists,
@@ -600,7 +541,7 @@ public class DomainFlowUtils {
     // message to be deleted), and then subsequently the transfer was canceled, rejected, or deleted
     // (which would cause the poll message to be recreated here). In the latter case, the history id
     // of the event that created the new poll message will also be used.
-    PollMessage.Autorenew updatedAutorenewPollMessage;
+    Autorenew updatedAutorenewPollMessage;
     if (autorenewPollMessage.isPresent()) {
       updatedAutorenewPollMessage =
           autorenewPollMessage.get().asBuilder().setAutorenewEndTime(newEndTime).build();
@@ -625,7 +566,7 @@ public class DomainFlowUtils {
 
     BillingRecurrence newBillingRecurrence =
         existingBillingRecurrence.asBuilder().setRecurrenceEndTime(newEndTime).build();
-    tm().put(newBillingRecurrence);
+    tm().update(newBillingRecurrence);
     return newBillingRecurrence;
   }
 
@@ -674,7 +615,7 @@ public class DomainFlowUtils {
     String feeClass = null;
     ImmutableList<Fee> fees = ImmutableList.of();
     switch (feeRequest.getCommandName()) {
-      case CREATE:
+      case CREATE -> {
         // Don't return a create price for reserved names.
         if (isReserved(domainName, isSunrise) && !isAvailable) {
           feeClass = "reserved";
@@ -694,16 +635,16 @@ public class DomainFlowUtils {
                       allocationToken)
                   .getFees();
         }
-        break;
-      case RENEW:
+      }
+      case RENEW -> {
         builder.setAvailIfSupported(true);
         fees =
             pricingLogic
                 .getRenewPrice(
                     tld, domainNameString, now, years, billingRecurrence, allocationToken)
                 .getFees();
-        break;
-      case RESTORE:
+      }
+      case RESTORE -> {
         // The minimum allowable period per the EPP spec is 1, so, strangely, 1 year still has to be
         // passed in as the period for a restore even if the domain would *not* be renewed as part
         // of a restore. This is fixed in RFC 8748 (which is a more recent version of the fee
@@ -717,23 +658,22 @@ public class DomainFlowUtils {
         // process, don't count as expired for the purposes of requiring an added year of renewal on
         // restore because they can't be restored in the first place.
         boolean isExpired =
-            domain.isPresent() && domain.get().getRegistrationExpirationTime().isBefore(now);
+            domain.isPresent() && domain.get().getRegistrationExpirationDateTime().isBefore(now);
         fees = pricingLogic.getRestorePrice(tld, domainNameString, now, isExpired).getFees();
-        break;
-      case TRANSFER:
+      }
+      case TRANSFER -> {
         if (years != 1) {
           throw new TransfersAreAlwaysForOneYearException();
         }
         builder.setAvailIfSupported(true);
         fees =
             pricingLogic.getTransferPrice(tld, domainNameString, now, billingRecurrence).getFees();
-        break;
-      case UPDATE:
+      }
+      case UPDATE -> {
         builder.setAvailIfSupported(true);
         fees = pricingLogic.getUpdatePrice(tld, domainNameString, now).getFees();
-        break;
-      default:
-        throw new UnknownFeeCommandException(feeRequest.getUnparsedCommandName());
+      }
+      default -> throw new UnknownFeeCommandException(feeRequest.getUnparsedCommandName());
     }
 
     if (feeClass == null) {
@@ -744,12 +684,15 @@ public class DomainFlowUtils {
           tld.getTldState(now).equals(START_DATE_SUNRISE)
               && getReservationTypes(domainName).contains(NAME_COLLISION);
       boolean isPremium = fees.stream().anyMatch(BaseFee::isPremium);
+      boolean isFeeStdV1 = builder instanceof FeeCheckResponseExtensionItemStdV1.Builder;
+      String standardFee = isFeeStdV1 ? "standard" : null;
       feeClass =
           emptyToNull(
               Joiner.on('-')
                   .skipNulls()
                   .join(
-                      isPremium ? "premium" : null, isNameCollisionInSunrise ? "collision" : null));
+                      isPremium ? "premium" : standardFee,
+                      isNameCollisionInSunrise ? "collision" : null));
     }
     builder.setClass(feeClass);
 
@@ -784,7 +727,7 @@ public class DomainFlowUtils {
       FeesAndCredits feesAndCredits,
       boolean defaultTokenUsed)
       throws EppException {
-    if (feesAndCredits.hasAnyPremiumFees() && !feeCommand.isPresent()) {
+    if (feesAndCredits.hasAnyPremiumFees() && feeCommand.isEmpty()) {
       throw new FeesRequiredForPremiumNameException();
     }
     validateFeesAckedIfPresent(feeCommand, feesAndCredits, defaultTokenUsed);
@@ -805,7 +748,7 @@ public class DomainFlowUtils {
     // Check for the case where a fee command extension was required but not provided.
     // This only happens when the total fees are non-zero and include custom fees requiring the
     // extension.
-    if (!feeCommand.isPresent()) {
+    if (feeCommand.isEmpty()) {
       if (!feesAndCredits.getEapCost().isZero()) {
         throw new FeesRequiredDuringEarlyAccessProgramException(feesAndCredits.getEapCost());
       }
@@ -944,23 +887,21 @@ public class DomainFlowUtils {
       throw new UrgentAttributeNotSupportedException();
     }
     // There must be at least one of add/rem/chg, and chg isn't actually supported.
-    if (secDnsUpdate.getChange() != null) {
+    if (secDnsUpdate.getChange().isPresent()) {
       // The only thing you can change is maxSigLife, and we don't support that at all.
       throw new MaxSigLifeChangeNotSupportedException();
     }
-    Add add = secDnsUpdate.getAdd();
-    Remove remove = secDnsUpdate.getRemove();
-    if (add == null && remove == null) {
+    Optional<Add> add = secDnsUpdate.getAdd();
+    Optional<Remove> remove = secDnsUpdate.getRemove();
+    if (add.isEmpty() && remove.isEmpty()) {
       throw new EmptySecDnsUpdateException();
     }
-    if (remove != null && Boolean.FALSE.equals(remove.getAll())) {
+    if (remove.isPresent() && Boolean.FALSE.equals(remove.get().getAll())) {
       throw new SecDnsAllUsageException(); // Explicit all=false is meaningless.
     }
-    Set<DomainDsData> toAdd = (add == null) ? ImmutableSet.of() : add.getDsData();
+    Set<DomainDsData> toAdd = add.map(Add::getDsData).orElse(ImmutableSet.of());
     Set<DomainDsData> toRemove =
-        (remove == null)
-            ? ImmutableSet.of()
-            : (remove.getAll() == null) ? remove.getDsData() : oldDsData;
+        remove.map(r -> (r.getAll() == null) ? r.getDsData() : oldDsData).orElse(ImmutableSet.of());
     // RFC 5910 specifies that removes are processed before adds.
     return ImmutableSet.copyOf(union(difference(oldDsData, toRemove), toAdd));
   }
@@ -1002,13 +943,8 @@ public class DomainFlowUtils {
   /** Validate the contacts and nameservers specified in a domain create command. */
   static void validateCreateCommandContactsAndNameservers(
       Create command, Tld tld, InternetDomainName domainName) throws EppException {
-    verifyNotInPendingDelete(
-        command.getContacts(), command.getRegistrant(), command.getNameservers());
-    validateContactsHaveTypes(command.getContacts());
+    verifyNotInPendingDelete(command.getNameservers());
     String tldStr = tld.getTldStr();
-    validateRegistrantAllowedOnTld(tldStr, command.getRegistrantContactId());
-    validateNoDuplicateContacts(command.getContacts());
-    validateRequiredContactsPresent(command.getRegistrant(), command.getContacts());
     ImmutableSet<String> hostNames = command.getNameserverHostNames();
     validateNameserversCountForTld(tldStr, domainName, hostNames.size());
     validateNameserversAllowedOnTld(tldStr, hostNames);
@@ -1017,7 +953,7 @@ public class DomainFlowUtils {
   /** Validate the secDNS extension, if present. */
   static Optional<SecDnsCreateExtension> validateSecDnsExtension(
       Optional<SecDnsCreateExtension> secDnsCreate) throws EppException {
-    if (!secDnsCreate.isPresent()) {
+    if (secDnsCreate.isEmpty()) {
       return Optional.empty();
     }
     if (secDnsCreate.get().getDsData() == null) {
@@ -1114,17 +1050,6 @@ public class DomainFlowUtils {
         .build();
   }
 
-  static ImmutableSet<ForeignKeyedDesignatedContact> loadForeignKeyedDesignatedContacts(
-      ImmutableSet<DesignatedContact> contacts) {
-    ImmutableSet.Builder<ForeignKeyedDesignatedContact> builder = new ImmutableSet.Builder<>();
-    for (DesignatedContact contact : contacts) {
-      builder.add(
-          ForeignKeyedDesignatedContact.create(
-              contact.getType(), tm().loadByKey(contact.getContactKey()).getContactId()));
-    }
-    return builder.build();
-  }
-
   /**
    * Returns a set of DomainTransactionRecords which negate the most recent HistoryEntry's records.
    *
@@ -1193,52 +1118,6 @@ public class DomainFlowUtils {
         .getResultList();
   }
 
-  /**
-   * Checks if there is a valid default token to be used for a domain create command.
-   *
-   * <p>If there is more than one valid default token for the registration, only the first valid
-   * token found on the TLD's default token list will be returned.
-   */
-  public static Optional<AllocationToken> checkForDefaultToken(
-      Tld tld, String domainName, CommandName commandName, String registrarId, DateTime now)
-      throws EppException {
-    if (isNullOrEmpty(tld.getDefaultPromoTokens())) {
-      return Optional.empty();
-    }
-    Map<VKey<AllocationToken>, Optional<AllocationToken>> tokens =
-        AllocationToken.getAll(tld.getDefaultPromoTokens());
-    ImmutableList<Optional<AllocationToken>> tokenList =
-        tld.getDefaultPromoTokens().stream()
-            .map(tokens::get)
-            .filter(Optional::isPresent)
-            .collect(toImmutableList());
-    checkState(
-        !isNullOrEmpty(tokenList),
-        "Failure while loading default TLD promotions from the database");
-    // Check if any of the tokens are valid for this domain registration
-    for (Optional<AllocationToken> token : tokenList) {
-      try {
-        AllocationTokenFlowUtils.validateToken(
-            InternetDomainName.from(domainName),
-            token.get(),
-            commandName,
-            registrarId,
-            isDomainPremium(domainName, now),
-            now);
-      } catch (AssociationProhibitsOperationException
-          | StatusProhibitsOperationException
-          | AllocationTokenInvalidForPremiumNameException e) {
-        // Allocation token was not valid for this registration, continue to check the next token in
-        // the list
-        continue;
-      }
-      // Only use the first valid token in the list
-      return token;
-    }
-    // No valid default token found
-    return Optional.empty();
-  }
-
   /** Resource linked to this domain does not exist. */
   static class LinkedResourcesDoNotExistException extends ObjectDoesNotExistException {
     public LinkedResourcesDoNotExistException(Class<?> type, ImmutableSet<String> resourceIds) {
@@ -1255,49 +1134,49 @@ public class DomainFlowUtils {
   }
 
   /** Domain names can only contain a-z, 0-9, '.' and '-'. */
-  static class BadDomainNameCharacterException extends ParameterValuePolicyErrorException {
+  static class BadDomainNameCharacterException extends ParameterValueSyntaxErrorException {
     public BadDomainNameCharacterException() {
       super("Domain names can only contain a-z, 0-9, '.' and '-'");
     }
   }
 
   /** Non-IDN domain names cannot contain hyphens in the third or fourth position. */
-  static class DashesInThirdAndFourthException extends ParameterValuePolicyErrorException {
+  static class DashesInThirdAndFourthException extends ParameterValueSyntaxErrorException {
     public DashesInThirdAndFourthException() {
       super("Non-IDN domain names cannot contain dashes in the third or fourth position");
     }
   }
 
   /** Domain labels cannot begin with a dash. */
-  static class LeadingDashException extends ParameterValuePolicyErrorException {
+  static class LeadingDashException extends ParameterValueSyntaxErrorException {
     public LeadingDashException() {
       super("Domain labels cannot begin with a dash");
     }
   }
 
   /** Domain labels cannot end with a dash. */
-  static class TrailingDashException extends ParameterValuePolicyErrorException {
+  static class TrailingDashException extends ParameterValueSyntaxErrorException {
     public TrailingDashException() {
       super("Domain labels cannot end with a dash");
     }
   }
 
   /** Domain labels cannot be longer than 63 characters. */
-  static class DomainLabelTooLongException extends ParameterValuePolicyErrorException {
+  static class DomainLabelTooLongException extends ParameterValueSyntaxErrorException {
     public DomainLabelTooLongException() {
       super("Domain labels cannot be longer than 63 characters");
     }
   }
 
   /** No part of a domain name can be empty. */
-  static class EmptyDomainNamePartException extends ParameterValuePolicyErrorException {
+  static class EmptyDomainNamePartException extends ParameterValueSyntaxErrorException {
     public EmptyDomainNamePartException() {
       super("No part of a domain name can be empty");
     }
   }
 
   /** Domain name starts with xn-- but is not a valid IDN. */
-  static class InvalidPunycodeException extends ParameterValuePolicyErrorException {
+  static class InvalidPunycodeException extends ParameterValueSyntaxErrorException {
     public InvalidPunycodeException() {
       super("Domain name starts with xn-- but is not a valid IDN");
     }
@@ -1307,32 +1186,6 @@ public class DomainFlowUtils {
   static class BadPeriodUnitException extends ParameterValuePolicyErrorException {
     public BadPeriodUnitException() {
       super("Periods for domain registrations must be specified in years");
-    }
-  }
-
-  /** Missing type attribute for contact. */
-  static class MissingContactTypeException extends ParameterValuePolicyErrorException {
-    public MissingContactTypeException() {
-      super("Missing type attribute for contact");
-    }
-  }
-
-  /** More than one contact for a given role is not allowed. */
-  static class DuplicateContactForRoleException extends ParameterValuePolicyErrorException {
-
-    public DuplicateContactForRoleException(Multimap<Type, String> dupeContactsByType) {
-      super(
-          String.format(
-              "More than one contact for a given role is not allowed: %s",
-              dupeContactsByType.asMap().entrySet().stream()
-                  .sorted(comparing(e -> e.getKey().name()))
-                  .map(
-                      e ->
-                          String.format(
-                              "role [%s] has contacts [%s]",
-                              Ascii.toLowerCase(e.getKey().name()),
-                              e.getValue().stream().sorted().collect(joining(", "))))
-                  .collect(joining(", "))));
     }
   }
 
@@ -1358,7 +1211,7 @@ public class DomainFlowUtils {
   }
 
   /** Domain name is under tld which doesn't exist. */
-  static class TldDoesNotExistException extends ParameterValueRangeErrorException {
+  public static class TldDoesNotExistException extends ParameterValueRangeErrorException {
     public TldDoesNotExistException(String tld) {
       super(String.format("Domain name is under tld %s which doesn't exist", tld));
     }
@@ -1371,24 +1224,10 @@ public class DomainFlowUtils {
     }
   }
 
-  /** Registrant is required. */
-  static class MissingRegistrantException extends RequiredParameterMissingException {
-    public MissingRegistrantException() {
-      super("Registrant is required");
-    }
-  }
-
-  /** Admin contact is required. */
-  static class MissingAdminContactException extends RequiredParameterMissingException {
-    public MissingAdminContactException() {
-      super("Admin contact is required");
-    }
-  }
-
-  /** Technical contact is required. */
-  static class MissingTechnicalContactException extends RequiredParameterMissingException {
-    public MissingTechnicalContactException() {
-      super("Technical contact is required");
+  /** Having a registrant is prohibited by registry policy. */
+  public static class RegistrantProhibitedException extends ParameterValuePolicyErrorException {
+    public RegistrantProhibitedException() {
+      super("Having a registrant is prohibited by registry policy");
     }
   }
 
@@ -1584,13 +1423,6 @@ public class DomainFlowUtils {
     }
   }
 
-  /** Registrant is not allow-listed for this TLD. */
-  public static class RegistrantNotAllowedException extends StatusProhibitsOperationException {
-    public RegistrantNotAllowedException(String contactId) {
-      super(String.format("Registrant with id %s is not allow-listed for this TLD", contactId));
-    }
-  }
-
   /** Nameservers are not allow-listed for this TLD. */
   public static class NameserversNotAllowedForTldException
       extends StatusProhibitsOperationException {
@@ -1740,6 +1572,14 @@ public class DomainFlowUtils {
   static class RegistrarMustBeActiveForThisOperationException extends AuthorizationErrorException {
     public RegistrarMustBeActiveForThisOperationException() {
       super("Registrar must be active in order to perform this operation");
+    }
+  }
+
+  /** Domain label is blocked by the Brand Safety Alliance. */
+  static class DomainLabelBlockedByBsaException extends ParameterValuePolicyErrorException {
+    public DomainLabelBlockedByBsaException() {
+      // TODO(b/309174065): finalize the exception message.
+      super("Domain label is blocked by the Brand Safety Alliance");
     }
   }
 }

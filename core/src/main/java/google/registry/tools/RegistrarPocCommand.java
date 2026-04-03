@@ -20,7 +20,6 @@ import static com.google.common.base.Strings.isNullOrEmpty;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static google.registry.util.CollectionUtils.nullToEmpty;
 import static google.registry.util.PreconditionsUtils.checkArgumentPresent;
-import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.beust.jcommander.Parameter;
 import com.beust.jcommander.Parameters;
@@ -41,7 +40,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import javax.annotation.Nullable;
@@ -89,18 +87,6 @@ final class RegistrarPocCommand extends MutatingCommand {
 
   @Nullable
   @Parameter(
-      names = "--login_email",
-      description = "Console login email address. If not specified, --email will be used.")
-  String loginEmail;
-
-  @Nullable
-  @Parameter(
-      names = "--registry_lock_email",
-      description = "Email address used for registry lock confirmation emails")
-  String registryLockEmail;
-
-  @Nullable
-  @Parameter(
       names = "--phone",
       description = "E.164 phone number, e.g. +1.2125650666",
       converter = OptionalPhoneNumberParameter.class,
@@ -117,44 +103,27 @@ final class RegistrarPocCommand extends MutatingCommand {
 
   @Nullable
   @Parameter(
-      names = "--allow_console_access",
-      description = "Enable or disable access to the registrar console for this contact.",
+      names = "--visible_in_rdap_as_admin",
+      description = "If this contact is publicly visible in RDAP results as an " + "Admin contact.",
       arity = 1)
-  Boolean allowConsoleAccess;
+  private Boolean visibleInRdapAsAdmin;
 
   @Nullable
   @Parameter(
-      names = "--visible_in_whois_as_admin",
-      description = " Whether this contact is publicly visible in WHOIS results as an "
-          + "Admin contact.",
+      names = "--visible_in_rdap_as_tech",
+      description = "If this contact is publicly visible in RDAP results as a " + "Tech contact.",
       arity = 1)
-  private Boolean visibleInWhoisAsAdmin;
+  private Boolean visibleInRdapAsTech;
 
   @Nullable
   @Parameter(
-      names = "--visible_in_whois_as_tech",
-      description = " Whether this contact is publicly visible in WHOIS results as a "
-          + "Tech contact.",
-      arity = 1)
-  private Boolean visibleInWhoisAsTech;
-
-  @Nullable
-  @Parameter(
-      names = "--visible_in_domain_whois_as_abuse",
-      description = " Whether this contact is publicly visible in WHOIS domain results as the "
-          + "registry abuse phone and email. If this flag is set, it will be cleared from all "
-          + "other contacts for the same registrar.",
-      arity = 1)
-  private Boolean visibleInDomainWhoisAsAbuse;
-
-  @Nullable
-  @Parameter(
-      names = "--allowed_to_set_registry_lock_password",
+      names = "--visible_in_domain_rdap_as_abuse",
       description =
-          "Allow this contact to set their registry lock password in the console,"
-              + " enabling registry lock",
+          " Whether this contact is publicly visible in RDAP domain results as the "
+              + "registry abuse phone and email. If this flag is set, it will be cleared from all "
+              + "other contacts for the same registrar.",
       arity = 1)
-  private Boolean allowedToSetRegistryLockPassword;
+  private Boolean visibleInDomainRdapAsAbuse;
 
   @Parameter(
       names = {"-o", "--output"},
@@ -173,7 +142,7 @@ final class RegistrarPocCommand extends MutatingCommand {
   protected void init() throws Exception {
     checkArgument(mainParameters.size() == 1,
         "Must specify exactly one client identifier: %s", ImmutableList.copyOf(mainParameters));
-    String clientId = mainParameters.get(0);
+    String clientId = mainParameters.getFirst();
     Registrar registrar =
         checkArgumentPresent(
             Registrar.loadByRegistrarId(clientId), "Registrar %s not found", clientId);
@@ -193,16 +162,14 @@ final class RegistrarPocCommand extends MutatingCommand {
     }
     RegistrarPoc oldContact;
     switch (mode) {
-      case LIST:
-        listContacts(contacts);
-        break;
-      case CREATE:
+      case LIST -> listContacts(contacts);
+      case CREATE -> {
         stageEntityChange(null, createContact(registrar));
-        if (visibleInDomainWhoisAsAbuse != null && visibleInDomainWhoisAsAbuse) {
-          unsetOtherWhoisAbuseFlags(contacts, null);
+        if (visibleInDomainRdapAsAbuse != null && visibleInDomainRdapAsAbuse) {
+          unsetOtherRdapAbuseFlags(contacts, null);
         }
-        break;
-      case UPDATE:
+      }
+      case UPDATE -> {
         oldContact =
             checkNotNull(
                 contactsMap.get(checkNotNull(email, "--email is required when --mode=UPDATE")),
@@ -210,28 +177,27 @@ final class RegistrarPocCommand extends MutatingCommand {
                 email);
         RegistrarPoc newContact = updateContact(oldContact, registrar);
         checkArgument(
-            !oldContact.getVisibleInDomainWhoisAsAbuse()
-                || newContact.getVisibleInDomainWhoisAsAbuse(),
-            "Cannot clear visible_in_domain_whois_as_abuse flag, as that would leave no domain"
-                + " WHOIS abuse contacts; instead, set the flag on another contact");
+            !oldContact.getVisibleInDomainRdapAsAbuse()
+                || newContact.getVisibleInDomainRdapAsAbuse(),
+            "Cannot clear visible_in_domain_rdap_as_abuse flag, as that would leave no domain"
+                + " RDAP abuse contacts; instead, set the flag on another contact");
         stageEntityChange(oldContact, newContact);
-        if (visibleInDomainWhoisAsAbuse != null && visibleInDomainWhoisAsAbuse) {
-          unsetOtherWhoisAbuseFlags(contacts, oldContact.getEmailAddress());
+        if (visibleInDomainRdapAsAbuse != null && visibleInDomainRdapAsAbuse) {
+          unsetOtherRdapAbuseFlags(contacts, oldContact.getEmailAddress());
         }
-        break;
-      case DELETE:
+      }
+      case DELETE -> {
         oldContact =
             checkNotNull(
                 contactsMap.get(checkNotNull(email, "--email is required when --mode=DELETE")),
                 "No contact with the given email: %s",
                 email);
         checkArgument(
-            !oldContact.getVisibleInDomainWhoisAsAbuse(),
-            "Cannot delete the domain WHOIS abuse contact; set the flag on another contact first");
+            !oldContact.getVisibleInDomainRdapAsAbuse(),
+            "Cannot delete the domain RDAP abuse contact; set the flag on another contact first");
         stageEntityChange(oldContact, null);
-        break;
-      default:
-        throw new AssertionError();
+      }
+      default -> throw new AssertionError();
     }
     if (MODES_REQUIRING_CONTACT_SYNC.contains(mode)) {
       stageEntityChange(registrar, registrar.asBuilder().setContactsRequireSyncing(true).build());
@@ -243,7 +209,7 @@ final class RegistrarPocCommand extends MutatingCommand {
     for (RegistrarPoc c : contacts) {
       result.add(c.toStringMultilinePlainText());
     }
-    Files.write(output, Joiner.on('\n').join(result).getBytes(UTF_8));
+    Files.writeString(output, Joiner.on('\n').join(result));
   }
 
   private RegistrarPoc createContact(Registrar registrar) {
@@ -253,9 +219,6 @@ final class RegistrarPocCommand extends MutatingCommand {
     builder.setRegistrar(registrar);
     builder.setName(name);
     builder.setEmailAddress(email);
-    if (!isNullOrEmpty(registryLockEmail)) {
-      builder.setRegistryLockEmailAddress(registryLockEmail);
-    }
     if (phone != null) {
       builder.setPhoneNumber(phone.orElse(null));
     }
@@ -264,20 +227,14 @@ final class RegistrarPocCommand extends MutatingCommand {
     }
     builder.setTypes(nullToEmpty(contactTypes));
 
-    if (Objects.equals(allowConsoleAccess, Boolean.TRUE)) {
-      builder.setLoginEmailAddress(loginEmail == null ? email : loginEmail);
+    if (visibleInRdapAsAdmin != null) {
+      builder.setVisibleInRdapAsAdmin(visibleInRdapAsAdmin);
     }
-    if (visibleInWhoisAsAdmin != null) {
-      builder.setVisibleInWhoisAsAdmin(visibleInWhoisAsAdmin);
+    if (visibleInRdapAsTech != null) {
+      builder.setVisibleInRdapAsTech(visibleInRdapAsTech);
     }
-    if (visibleInWhoisAsTech != null) {
-      builder.setVisibleInWhoisAsTech(visibleInWhoisAsTech);
-    }
-    if (visibleInDomainWhoisAsAbuse != null) {
-      builder.setVisibleInDomainWhoisAsAbuse(visibleInDomainWhoisAsAbuse);
-    }
-    if (allowedToSetRegistryLockPassword != null) {
-      builder.setAllowedToSetRegistryLockPassword(allowedToSetRegistryLockPassword);
+    if (visibleInDomainRdapAsAbuse != null) {
+      builder.setVisibleInDomainRdapAsAbuse(visibleInDomainRdapAsAbuse);
     }
     return builder.build();
   }
@@ -290,9 +247,6 @@ final class RegistrarPocCommand extends MutatingCommand {
     if (!isNullOrEmpty(name)) {
       builder.setName(name);
     }
-    if (!isNullOrEmpty(registryLockEmail)) {
-      builder.setRegistryLockEmailAddress(registryLockEmail);
-    }
     if (phone != null) {
       builder.setPhoneNumber(phone.orElse(null));
     }
@@ -302,34 +256,24 @@ final class RegistrarPocCommand extends MutatingCommand {
     if (contactTypes != null) {
       builder.setTypes(contactTypes);
     }
-    if (visibleInWhoisAsAdmin != null) {
-      builder.setVisibleInWhoisAsAdmin(visibleInWhoisAsAdmin);
+    if (visibleInRdapAsAdmin != null) {
+      builder.setVisibleInRdapAsAdmin(visibleInRdapAsAdmin);
     }
-    if (visibleInWhoisAsTech != null) {
-      builder.setVisibleInWhoisAsTech(visibleInWhoisAsTech);
+    if (visibleInRdapAsTech != null) {
+      builder.setVisibleInRdapAsTech(visibleInRdapAsTech);
     }
-    if (visibleInDomainWhoisAsAbuse != null) {
-      builder.setVisibleInDomainWhoisAsAbuse(visibleInDomainWhoisAsAbuse);
-    }
-    if (allowConsoleAccess != null) {
-      if (allowConsoleAccess.equals(Boolean.TRUE)) {
-        builder.setLoginEmailAddress(loginEmail == null ? email : loginEmail);
-      } else {
-        builder.setLoginEmailAddress(null);
-      }
-    }
-    if (allowedToSetRegistryLockPassword != null) {
-      builder.setAllowedToSetRegistryLockPassword(allowedToSetRegistryLockPassword);
+    if (visibleInDomainRdapAsAbuse != null) {
+      builder.setVisibleInDomainRdapAsAbuse(visibleInDomainRdapAsAbuse);
     }
     return builder.build();
   }
 
-  private void unsetOtherWhoisAbuseFlags(
+  private void unsetOtherRdapAbuseFlags(
       ImmutableSet<RegistrarPoc> contacts, @Nullable String emailAddressNotToChange) {
     for (RegistrarPoc contact : contacts) {
       if (!contact.getEmailAddress().equals(emailAddressNotToChange)
-          && contact.getVisibleInDomainWhoisAsAbuse()) {
-        RegistrarPoc newContact = contact.asBuilder().setVisibleInDomainWhoisAsAbuse(false).build();
+          && contact.getVisibleInDomainRdapAsAbuse()) {
+        RegistrarPoc newContact = contact.asBuilder().setVisibleInDomainRdapAsAbuse(false).build();
         stageEntityChange(contact, newContact);
       }
     }

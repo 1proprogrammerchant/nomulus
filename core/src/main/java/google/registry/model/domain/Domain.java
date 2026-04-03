@@ -14,28 +14,33 @@
 
 package google.registry.model.domain;
 
+import static google.registry.util.DateTimeUtils.toInstant;
+
 import google.registry.model.EppResource;
 import google.registry.model.EppResource.ForeignKeyedEppResource;
 import google.registry.model.annotations.ExternalMessagingName;
 import google.registry.model.domain.secdns.DomainDsData;
 import google.registry.model.host.Host;
+import google.registry.model.host.VKeyConverter_Host;
+import google.registry.persistence.EntityCallbacksListener.RecursivePostLoad;
 import google.registry.persistence.VKey;
 import google.registry.persistence.WithVKey;
+import jakarta.persistence.Access;
+import jakarta.persistence.AccessType;
+import jakarta.persistence.CascadeType;
+import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
+import jakarta.persistence.ElementCollection;
+import jakarta.persistence.Entity;
+import jakarta.persistence.FetchType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Index;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.JoinTable;
+import jakarta.persistence.OneToMany;
+import jakarta.persistence.Table;
+import java.time.Instant;
 import java.util.Set;
-import javax.persistence.Access;
-import javax.persistence.AccessType;
-import javax.persistence.CascadeType;
-import javax.persistence.Column;
-import javax.persistence.ElementCollection;
-import javax.persistence.Entity;
-import javax.persistence.FetchType;
-import javax.persistence.Id;
-import javax.persistence.Index;
-import javax.persistence.JoinColumn;
-import javax.persistence.JoinTable;
-import javax.persistence.OneToMany;
-import javax.persistence.PostLoad;
-import javax.persistence.Table;
 import org.hibernate.Hibernate;
 import org.joda.time.DateTime;
 
@@ -61,7 +66,8 @@ import org.joda.time.DateTime;
       @Index(columnList = "lordnPhase"),
       @Index(columnList = "billing_recurrence_id"),
       @Index(columnList = "transfer_billing_event_id"),
-      @Index(columnList = "transfer_billing_recurrence_id")
+      @Index(columnList = "transfer_billing_recurrence_id"),
+      @Index(columnList = "transfer_billing_cancellation_id")
     })
 @WithVKey(String.class)
 @ExternalMessagingName("domain")
@@ -86,6 +92,7 @@ public class Domain extends DomainBase implements ForeignKeyedEppResource {
       })
   @Access(AccessType.PROPERTY)
   @Column(name = "host_repo_id")
+  @Convert(converter = VKeyConverter_Host.class)
   public Set<VKey<Host>> getNsHosts() {
     return nsHosts;
   }
@@ -135,7 +142,7 @@ public class Domain extends DomainBase implements ForeignKeyedEppResource {
   }
 
   /** Post-load method to eager load the collections. */
-  @PostLoad
+  @RecursivePostLoad
   protected void postLoad() {
     // TODO(b/188044616): Determine why Eager loading doesn't work here.
     Hibernate.initialize(dsData);
@@ -149,6 +156,11 @@ public class Domain extends DomainBase implements ForeignKeyedEppResource {
 
   @Override
   public Domain cloneProjectedAtTime(final DateTime now) {
+    return cloneDomainProjectedAtTime(this, toInstant(now));
+  }
+
+  @Override
+  public Domain cloneProjectedAtInstant(final Instant now) {
     return cloneDomainProjectedAtTime(this, now);
   }
 
@@ -169,38 +181,6 @@ public class Domain extends DomainBase implements ForeignKeyedEppResource {
 
     Builder(Domain instance) {
       super(instance);
-    }
-
-    public Builder copyFrom(DomainBase domainBase) {
-      getInstance().copyUpdateTimestamp(domainBase);
-      return setAuthInfo(domainBase.getAuthInfo())
-          .setAutorenewPollMessage(domainBase.getAutorenewPollMessage())
-          .setAutorenewBillingEvent(domainBase.getAutorenewBillingEvent())
-          .setAutorenewEndTime(domainBase.getAutorenewEndTime())
-          .setContacts(domainBase.getContacts())
-          .setCreationRegistrarId(domainBase.getCreationRegistrarId())
-          .setCreationTime(domainBase.getCreationTime())
-          .setDomainName(domainBase.getDomainName())
-          .setDeletePollMessage(domainBase.getDeletePollMessage())
-          .setDsData(domainBase.getDsData())
-          .setDeletionTime(domainBase.getDeletionTime())
-          .setGracePeriods(domainBase.getGracePeriods())
-          .setIdnTableName(domainBase.getIdnTableName())
-          .setLastTransferTime(domainBase.getLastTransferTime())
-          .setLaunchNotice(domainBase.getLaunchNotice())
-          .setLastEppUpdateRegistrarId(domainBase.getLastEppUpdateRegistrarId())
-          .setLastEppUpdateTime(domainBase.getLastEppUpdateTime())
-          .setNameservers(domainBase.getNameservers())
-          .setPersistedCurrentSponsorRegistrarId(domainBase.getPersistedCurrentSponsorRegistrarId())
-          .setRegistrant(domainBase.getRegistrant())
-          .setRegistrationExpirationTime(domainBase.getRegistrationExpirationTime())
-          .setRepoId(domainBase.getRepoId())
-          .setSmdId(domainBase.getSmdId())
-          .setSubordinateHosts(domainBase.getSubordinateHosts())
-          .setStatusValues(domainBase.getStatusValues())
-          .setTransferData(domainBase.getTransferData())
-          .setLordnPhase(domainBase.getLordnPhase())
-          .setCurrentBulkToken(domainBase.getCurrentBulkToken().orElse(null));
     }
   }
 }

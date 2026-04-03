@@ -20,13 +20,17 @@ import static google.registry.testing.DatabaseHelper.createTld;
 import static google.registry.testing.DatabaseHelper.createTlds;
 import static google.registry.testing.DatabaseHelper.persistActiveDomain;
 import static google.registry.testing.DatabaseHelper.persistResource;
-import static google.registry.testing.DatabaseHelper.persistSimpleResources;
+import static google.registry.testing.DatabaseHelper.persistResources;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.beust.jcommander.ParameterException;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.ImmutableSortedMap;
 import google.registry.model.domain.Domain;
+import google.registry.model.domain.fee.FeeQueryCommandExtensionItem;
 import google.registry.model.domain.token.AllocationToken;
+import google.registry.util.DateTimeUtils;
 import org.joda.time.DateTime;
 import org.junit.jupiter.api.Test;
 
@@ -41,17 +45,56 @@ class GetAllocationTokenCommandTest extends CommandTestCase<GetAllocationTokenCo
             new AllocationToken.Builder()
                 .setToken("foo")
                 .setTokenType(SINGLE_USE)
+                .setAllowedEppActions(
+                    ImmutableSet.of(FeeQueryCommandExtensionItem.CommandName.CREATE))
+                .setAllowedRegistrarIds(ImmutableSet.of("TheRegistrar"))
+                .setAllowedTlds(ImmutableSet.of("bar"))
+                .setDiscountFraction(0.5)
+                .setDiscountYears(2)
+                .setTokenStatusTransitions(
+                    ImmutableSortedMap.of(
+                        DateTimeUtils.START_OF_TIME,
+                        AllocationToken.TokenStatus.NOT_STARTED,
+                        fakeClock.nowUtc(),
+                        AllocationToken.TokenStatus.VALID))
                 .setDomainName("foo.bar")
                 .build());
     runCommand("foo");
-    assertInStdout(token.toString(), "Token foo was not redeemed.");
+    assertStdoutIs(
+"""
+AllocationToken: {
+    allowedClientIds=[TheRegistrar]
+    allowedEppActions=[CREATE]
+    allowedTlds=[bar]
+    creationTime=CreateAutoTimestamp: {
+        creationTime=2022-09-01T00:00:00.000Z
+    }
+    discountFraction=0.5
+    discountPremiums=false
+    discountPrice=null
+    discountYears=2
+    domainName=foo.bar
+    redemptionHistoryId=null
+    registrationBehavior=DEFAULT
+    renewalPrice=null
+    renewalPriceBehavior=DEFAULT
+    token=foo
+    tokenStatusTransitions={1970-01-01T00:00:00.000Z=NOT_STARTED, 2022-09-01T00:00:00.000Z=VALID}
+    tokenType=SINGLE_USE
+    updateTimestamp=UpdateAutoTimestamp: {
+        lastUpdateTime=2022-09-01T00:00:00.000Z
+    }
+}
+Token foo was not redeemed.
+
+""");
   }
 
   @Test
   void testSuccess_multipleTokens() throws Exception {
     createTlds("baz");
     ImmutableList<AllocationToken> tokens =
-        persistSimpleResources(
+        persistResources(
             ImmutableList.of(
                 new AllocationToken.Builder()
                     .setToken("fee")

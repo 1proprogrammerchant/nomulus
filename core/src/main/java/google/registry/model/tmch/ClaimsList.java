@@ -26,20 +26,20 @@ import com.google.common.collect.ImmutableMap;
 import google.registry.model.CacheUtils;
 import google.registry.model.CreateAutoTimestamp;
 import google.registry.model.ImmutableObject;
+import google.registry.persistence.EntityCallbacksListener.RecursivePostPersist;
+import google.registry.persistence.EntityCallbacksListener.RecursivePostUpdate;
+import google.registry.persistence.EntityCallbacksListener.RecursivePreRemove;
+import jakarta.persistence.AttributeOverride;
+import jakarta.persistence.AttributeOverrides;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 import java.util.Map;
 import java.util.Optional;
-import javax.persistence.AttributeOverride;
-import javax.persistence.AttributeOverrides;
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.GeneratedValue;
-import javax.persistence.GenerationType;
-import javax.persistence.Id;
-import javax.persistence.PostPersist;
-import javax.persistence.PostUpdate;
-import javax.persistence.PreRemove;
-import javax.persistence.Table;
-import javax.persistence.Transient;
 import org.joda.time.DateTime;
 
 /**
@@ -102,9 +102,9 @@ public class ClaimsList extends ImmutableObject {
   final LoadingCache<String, Optional<String>> claimKeyCache =
       CacheUtils.newCacheBuilder().build(this::getClaimKeyUncached);
 
-  @PreRemove
+  @RecursivePreRemove
   void preRemove() {
-    tm().query("DELETE FROM ClaimsEntry WHERE revision_id = :revisionId")
+    tm().query("DELETE FROM ClaimsEntry WHERE revisionId = :revisionId")
         .setParameter("revisionId", revisionId)
         .executeUpdate();
   }
@@ -114,10 +114,10 @@ public class ClaimsList extends ImmutableObject {
    * ClaimsEntry}'s.
    *
    * <p>We need to persist the list entries, but only on the initial insert (not on update) since
-   * the entries themselves never get changed, so we only annotate it with {@link PostPersist}, not
-   * {@link PostUpdate}.
+   * the entries themselves never get changed, so we only annotate it with {@link
+   * RecursivePostPersist}, not {@link RecursivePostUpdate}.
    */
-  @PostPersist
+  @RecursivePostPersist
   void postPersist() {
     if (labelsToKeys != null) {
       labelsToKeys.forEach(

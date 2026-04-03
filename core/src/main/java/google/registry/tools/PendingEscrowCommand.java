@@ -21,14 +21,14 @@ import com.google.common.collect.ComparisonChain;
 import com.google.common.collect.Ordering;
 import google.registry.rde.PendingDeposit;
 import google.registry.rde.PendingDepositChecker;
-import javax.inject.Inject;
+import jakarta.inject.Inject;
 
 /** Command to show what escrow deposits are pending generation on the server. */
 @Parameters(separators = " =", commandDescription = "List pending RDE/BRDA deposits.")
 final class PendingEscrowCommand implements Command {
 
   private static final Ordering<PendingDeposit> SORTER =
-      new Ordering<PendingDeposit>() {
+      new Ordering<>() {
         @Override
         public int compare(PendingDeposit left, PendingDeposit right) {
           return ComparisonChain.start()
@@ -36,7 +36,8 @@ final class PendingEscrowCommand implements Command {
               .compare(left.mode(), right.mode())
               .compare(left.watermark(), right.watermark())
               .result();
-        }};
+        }
+      };
 
   @Inject
   PendingDepositChecker checker;

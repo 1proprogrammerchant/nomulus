@@ -26,16 +26,14 @@ class ActivityReportingQueryBuilderTest {
 
   private final YearMonth yearMonth = new YearMonth(2017, 9);
 
+  @SuppressWarnings("NonCanonicalType")
   private ActivityReportingQueryBuilder createQueryBuilder(String datasetName) {
     return new ActivityReportingQueryBuilder(
-        "domain-registry-alpha",
-        datasetName,
-        new BasicDnsCountQueryCoordinator(
-            new BasicDnsCountQueryCoordinator.Params(null, "domain-registry-alpha", datasetName)));
+        "domain-registry-alpha", datasetName, new DummyDnsCountQueryCoordinator());
   }
 
   @Test
-  void testAggregateQueryMatch_cloudSql() {
+  void testAggregateQueryMatch() {
     ActivityReportingQueryBuilder queryBuilder = createQueryBuilder("cloud_sql_icann_reporting");
     assertThat(queryBuilder.getReportQuery(yearMonth))
         .isEqualTo(
@@ -45,21 +43,21 @@ class ActivityReportingQueryBuilderTest {
   }
 
   @Test
-  void testIntermediaryQueryMatch_cloudSql() {
+  void testIntermediaryQueryMatch() {
     ImmutableList<String> expectedQueryNames =
         ImmutableList.of(
             ActivityReportingQueryBuilder.REGISTRAR_OPERATING_STATUS,
             ActivityReportingQueryBuilder.MONTHLY_LOGS,
             ActivityReportingQueryBuilder.DNS_COUNTS,
             ActivityReportingQueryBuilder.EPP_METRICS,
-            ActivityReportingQueryBuilder.WHOIS_COUNTS,
+            ActivityReportingQueryBuilder.RDAP_COUNTS,
             ActivityReportingQueryBuilder.ACTIVITY_REPORT_AGGREGATION);
 
     ActivityReportingQueryBuilder queryBuilder = createQueryBuilder("cloud_sql_icann_reporting");
     ImmutableMap<String, String> actualQueries = queryBuilder.getViewQueryMap(yearMonth);
     for (String queryName : expectedQueryNames) {
       String actualTableName = String.format("%s_201709", queryName);
-      String testFilename = String.format("%s_test_cloud_sql.sql", queryName);
+      String testFilename = String.format("%s_test.sql", queryName);
       assertThat(actualQueries.get(actualTableName))
           .isEqualTo(ReportingTestData.loadFile(testFilename));
     }

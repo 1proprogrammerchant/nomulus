@@ -19,7 +19,6 @@ import static com.google.common.base.Preconditions.checkState;
 import static google.registry.flows.domain.DomainFlowUtils.newAutorenewBillingEvent;
 import static google.registry.flows.domain.DomainFlowUtils.newAutorenewPollMessage;
 import static google.registry.flows.domain.DomainFlowUtils.updateAutorenewRecurrenceEndTime;
-import static google.registry.model.EppResourceUtils.loadByForeignKey;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
 import static google.registry.util.DateTimeUtils.START_OF_TIME;
 import static google.registry.util.DateTimeUtils.isBeforeOrAt;
@@ -42,9 +41,10 @@ import google.registry.model.poll.PollMessage;
 import google.registry.model.reporting.HistoryEntry.Type;
 import google.registry.util.Clock;
 import google.registry.util.NonFinalForTesting;
+import jakarta.inject.Inject;
+import java.io.UnsupportedEncodingException;
 import java.util.List;
 import java.util.Optional;
-import javax.inject.Inject;
 import org.joda.time.DateTime;
 
 /**
@@ -76,7 +76,7 @@ class UnrenewDomainCommand extends ConfirmingCommand {
           StatusValue.SERVER_UPDATE_PROHIBITED);
 
   @Override
-  protected void init() {
+  protected void init() throws UnsupportedEncodingException {
     checkArgument(period >= 1 && period <= 9, "Period must be in the range 1-9");
     DateTime now = clock.nowUtc();
     ImmutableSet.Builder<String> domainsNonexistentBuilder = new ImmutableSet.Builder<>();
@@ -87,21 +87,21 @@ class UnrenewDomainCommand extends ConfirmingCommand {
         new ImmutableMap.Builder<>();
 
     for (String domainName : mainParameters) {
-      if (ForeignKeyUtils.load(Domain.class, domainName, START_OF_TIME) == null) {
+      if (ForeignKeyUtils.loadKey(Domain.class, domainName, START_OF_TIME).isEmpty()) {
         domainsNonexistentBuilder.add(domainName);
         continue;
       }
-      Optional<Domain> domain = loadByForeignKey(Domain.class, domainName, now);
-      if (!domain.isPresent()
-          || domain.get().getStatusValues().contains(StatusValue.PENDING_DELETE)) {
+      Optional<Domain> domain = ForeignKeyUtils.loadResource(Domain.class, domainName, now);
+      if (domain.isEmpty() || domain.get().getStatusValues().contains(StatusValue.PENDING_DELETE)) {
         domainsDeletingBuilder.add(domainName);
         continue;
       }
       domainsWithDisallowedStatusesBuilder.putAll(
           domainName, Sets.intersection(domain.get().getStatusValues(), DISALLOWED_STATUSES));
       if (isBeforeOrAt(
-          leapSafeSubtractYears(domain.get().getRegistrationExpirationTime(), period), now)) {
-        domainsExpiringTooSoonBuilder.put(domainName, domain.get().getRegistrationExpirationTime());
+          leapSafeSubtractYears(domain.get().getRegistrationExpirationDateTime(), period), now)) {
+        domainsExpiringTooSoonBuilder.put(
+            domainName, domain.get().getRegistrationExpirationDateTime());
       }
     }
 
@@ -116,20 +116,24 @@ class UnrenewDomainCommand extends ConfirmingCommand {
             && domainsDeleting.isEmpty()
             && domainsWithDisallowedStatuses.isEmpty()
             && domainsExpiringTooSoon.isEmpty());
+
     if (foundInvalidDomains) {
-      System.err.print("Found domains that cannot be unrenewed for the following reasons:\n\n");
+      errorPrintStream.print(
+          "Found domains that cannot be unrenewed for the following reasons:\n\n");
     }
     if (!domainsNonexistent.isEmpty()) {
-      System.err.printf("Domains that don't exist: %s\n\n", domainsNonexistent);
+      errorPrintStream.printf("Domains that don't exist: %s\n\n", domainsNonexistent);
     }
     if (!domainsDeleting.isEmpty()) {
-      System.err.printf("Domains that are deleted or pending delete: %s\n\n", domainsDeleting);
+      errorPrintStream.printf(
+          "Domains that are deleted or pending delete: %s\n\n", domainsDeleting);
     }
     if (!domainsWithDisallowedStatuses.isEmpty()) {
-      System.err.printf("Domains with disallowed statuses: %s\n\n", domainsWithDisallowedStatuses);
+      errorPrintStream.printf(
+          "Domains with disallowed statuses: %s\n\n", domainsWithDisallowedStatuses);
     }
     if (!domainsExpiringTooSoon.isEmpty()) {
-      System.err.printf("Domains expiring too soon: %s\n\n", domainsExpiringTooSoon);
+      errorPrintStream.printf("Domains expiring too soon: %s\n\n", domainsExpiringTooSoon);
     }
     checkArgument(!foundInvalidDomains, "Aborting because some domains cannot be unrenewed");
   }
@@ -139,8 +143,8 @@ class UnrenewDomainCommand extends ConfirmingCommand {
     StringBuilder resultBuilder = new StringBuilder();
     DateTime now = clock.nowUtc();
     for (String domainName : mainParameters) {
-      Domain domain = loadByForeignKey(Domain.class, domainName, now).get();
-      DateTime previousTime = domain.getRegistrationExpirationTime();
+      Domain domain = ForeignKeyUtils.loadResource(Domain.class, domainName, now).get();
+      DateTime previousTime = domain.getRegistrationExpirationDateTime();
       DateTime newTime = leapSafeSubtractYears(previousTime, period);
       resultBuilder.append(
           String.format(
@@ -154,7 +158,7 @@ class UnrenewDomainCommand extends ConfirmingCommand {
   protected String execute() {
     for (String domainName : mainParameters) {
       tm().transact(() -> unrenewDomain(domainName));
-      System.out.printf("Unrenewed %s\n", domainName);
+      printStream.printf("Unrenewed %s\n", domainName);
     }
     return "Successfully unrenewed all domains.";
   }
@@ -162,7 +166,7 @@ class UnrenewDomainCommand extends ConfirmingCommand {
   private void unrenewDomain(String domainName) {
     tm().assertInTransaction();
     DateTime now = tm().getTransactionTime();
-    Optional<Domain> domainOptional = loadByForeignKey(Domain.class, domainName, now);
+    Optional<Domain> domainOptional = ForeignKeyUtils.loadResource(Domain.class, domainName, now);
     // Transactional sanity checks on the off chance that something changed between init() running
     // and here.
     checkState(
@@ -176,12 +180,12 @@ class UnrenewDomainCommand extends ConfirmingCommand {
         "Domain %s has prohibited status values",
         domainName);
     checkState(
-        leapSafeSubtractYears(domain.getRegistrationExpirationTime(), period).isAfter(now),
+        leapSafeSubtractYears(domain.getRegistrationExpirationDateTime(), period).isAfter(now),
         "Domain %s expires too soon",
         domainName);
 
     DateTime newExpirationTime =
-        leapSafeSubtractYears(domain.getRegistrationExpirationTime(), period);
+        leapSafeSubtractYears(domain.getRegistrationExpirationDateTime(), period);
     DomainHistory domainHistory =
         new DomainHistory.Builder()
             .setDomain(domain)

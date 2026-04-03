@@ -25,12 +25,11 @@ import static google.registry.dns.DnsModule.PARAM_REFRESH_REQUEST_TIME;
 import static google.registry.dns.DnsUtils.DNS_PUBLISH_PUSH_QUEUE_NAME;
 import static google.registry.dns.DnsUtils.requestDomainDnsRefresh;
 import static google.registry.dns.DnsUtils.requestHostDnsRefresh;
-import static google.registry.model.EppResourceUtils.loadByForeignKey;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
 import static google.registry.request.Action.Method.POST;
 import static google.registry.request.RequestParameters.PARAM_TLD;
 import static google.registry.util.CollectionUtils.nullToEmpty;
-import static javax.servlet.http.HttpServletResponse.SC_ACCEPTED;
+import static jakarta.servlet.http.HttpServletResponse.SC_ACCEPTED;
 
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
@@ -45,13 +44,14 @@ import google.registry.dns.DnsMetrics.ActionStatus;
 import google.registry.dns.DnsMetrics.CommitStatus;
 import google.registry.dns.DnsMetrics.PublishStatus;
 import google.registry.dns.writer.DnsWriter;
+import google.registry.groups.GmailClient;
+import google.registry.model.ForeignKeyUtils;
 import google.registry.model.domain.Domain;
 import google.registry.model.host.Host;
 import google.registry.model.registrar.Registrar;
 import google.registry.model.registrar.RegistrarPoc;
 import google.registry.model.tld.Tld;
 import google.registry.request.Action;
-import google.registry.request.Action.Service;
 import google.registry.request.Header;
 import google.registry.request.HttpException.ServiceUnavailableException;
 import google.registry.request.Parameter;
@@ -61,12 +61,11 @@ import google.registry.request.lock.LockHandler;
 import google.registry.util.Clock;
 import google.registry.util.DomainNameUtils;
 import google.registry.util.EmailMessage;
-import google.registry.util.SendEmailService;
+import jakarta.inject.Inject;
+import jakarta.mail.internet.InternetAddress;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
-import javax.inject.Inject;
-import javax.mail.internet.InternetAddress;
 import org.joda.time.DateTime;
 import org.joda.time.Duration;
 
@@ -76,7 +75,7 @@ import org.joda.time.Duration;
     path = PublishDnsUpdatesAction.PATH,
     method = POST,
     automaticallyPrintOk = true,
-    auth = Auth.AUTH_API_ADMIN)
+    auth = Auth.AUTH_ADMIN)
 public final class PublishDnsUpdatesAction implements Runnable, Callable<Void> {
 
   public static final String PATH = "/_dr/task/publishDnsUpdates";
@@ -112,13 +111,12 @@ public final class PublishDnsUpdatesAction implements Runnable, Callable<Void> {
   private final Clock clock;
   private final CloudTasksUtils cloudTasksUtils;
   private final Response response;
-  private final SendEmailService sendEmailService;
+  private final GmailClient gmailClient;
   private final String dnsUpdateFailEmailSubjectText;
   private final String dnsUpdateFailEmailBodyText;
   private final String dnsUpdateFailRegistryName;
   private final Lazy<InternetAddress> registrySupportEmail;
   private final Lazy<InternetAddress> registryCcEmail;
-  private final InternetAddress gSuiteOutgoingEmailAddress;
 
   @Inject
   public PublishDnsUpdatesAction(
@@ -136,19 +134,18 @@ public final class PublishDnsUpdatesAction implements Runnable, Callable<Void> {
       @Config("dnsUpdateFailRegistryName") String dnsUpdateFailRegistryName,
       @Config("registrySupportEmail") Lazy<InternetAddress> registrySupportEmail,
       @Config("registryCcEmail") Lazy<InternetAddress> registryCcEmail,
-      @Config("gSuiteOutgoingEmailAddress") InternetAddress gSuiteOutgoingEmailAddress,
       @Header(CLOUD_TASKS_RETRY_HEADER) int retryCount,
       DnsWriterProxy dnsWriterProxy,
       DnsMetrics dnsMetrics,
       LockHandler lockHandler,
       Clock clock,
       CloudTasksUtils cloudTasksUtils,
-      SendEmailService sendEmailService,
+      GmailClient gmailClient,
       Response response) {
     this.dnsWriterProxy = dnsWriterProxy;
     this.dnsMetrics = dnsMetrics;
     this.timeout = timeout;
-    this.sendEmailService = sendEmailService;
+    this.gmailClient = gmailClient;
     this.retryCount = retryCount;
     this.dnsWriter = dnsWriter;
     this.enqueuedTime = enqueuedTime;
@@ -167,7 +164,6 @@ public final class PublishDnsUpdatesAction implements Runnable, Callable<Void> {
     this.dnsUpdateFailRegistryName = dnsUpdateFailRegistryName;
     this.registrySupportEmail = registrySupportEmail;
     this.registryCcEmail = registryCcEmail;
-    this.gSuiteOutgoingEmailAddress = gSuiteOutgoingEmailAddress;
   }
 
   private void recordActionResult(ActionStatus status) {
@@ -240,7 +236,8 @@ public final class PublishDnsUpdatesAction implements Runnable, Callable<Void> {
             .findFirst()
             .ifPresent(
                 dn -> {
-                  Optional<Domain> domain = loadByForeignKey(Domain.class, dn, clock.nowUtc());
+                  Optional<Domain> domain =
+                      ForeignKeyUtils.loadResource(Domain.class, dn, clock.nowUtc());
                   if (domain.isPresent()) {
                     notifyWithEmailAboutDnsUpdateFailure(
                         domain.get().getCurrentSponsorRegistrarId(), dn, false);
@@ -253,7 +250,8 @@ public final class PublishDnsUpdatesAction implements Runnable, Callable<Void> {
             .findFirst()
             .ifPresent(
                 hn -> {
-                  Optional<Host> host = loadByForeignKey(Host.class, hn, clock.nowUtc());
+                  Optional<Host> host =
+                      ForeignKeyUtils.loadResource(Host.class, hn, clock.nowUtc());
                   if (host.isPresent()) {
                     notifyWithEmailAboutDnsUpdateFailure(
                         host.get().getPersistedCurrentSponsorRegistrarId(), hn, true);
@@ -303,13 +301,12 @@ public final class PublishDnsUpdatesAction implements Runnable, Callable<Void> {
               .map(PublishDnsUpdatesAction::emailToInternetAddress)
               .collect(toImmutableList());
 
-      sendEmailService.sendEmail(
+      gmailClient.sendEmail(
           EmailMessage.newBuilder()
               .setBody(body)
               .setSubject(dnsUpdateFailEmailSubjectText)
               .setRecipients(recipients)
               .addBcc(registryCcEmail.get())
-              .setFrom(gSuiteOutgoingEmailAddress)
               .build());
 
     } else {
@@ -331,9 +328,9 @@ public final class PublishDnsUpdatesAction implements Runnable, Callable<Void> {
   private void enqueue(ImmutableList<String> domains, ImmutableList<String> hosts) {
     cloudTasksUtils.enqueue(
         DNS_PUBLISH_PUSH_QUEUE_NAME,
-        cloudTasksUtils.createPostTask(
-            PATH,
-            Service.BACKEND,
+        cloudTasksUtils.createTask(
+            this.getClass(),
+            POST,
             ImmutableMultimap.<String, String>builder()
                 .put(PARAM_TLD, tld)
                 .put(PARAM_DNS_WRITER, dnsWriter)

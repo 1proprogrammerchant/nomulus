@@ -22,7 +22,6 @@ import static google.registry.request.Action.Method.GET;
 import static google.registry.request.Action.Method.POST;
 import static google.registry.request.RequestParameters.PARAM_TLDS;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import google.registry.model.EppResourceUtils;
@@ -31,19 +30,15 @@ import google.registry.request.Action;
 import google.registry.request.Parameter;
 import google.registry.request.auth.Auth;
 import google.registry.util.Clock;
-import google.registry.util.NonFinalForTesting;
-import javax.inject.Inject;
+import jakarta.inject.Inject;
 
 /** An action that lists domains, for use by the {@code nomulus list_domains} command. */
 @Action(
-    service = Action.Service.TOOLS,
+    service = Action.Service.BACKEND,
     path = ListDomainsAction.PATH,
     method = {GET, POST},
-    auth = Auth.AUTH_API_ADMIN)
+    auth = Auth.AUTH_ADMIN)
 public final class ListDomainsAction extends ListObjectsAction<Domain> {
-
-  /** An App Engine limitation on how many subqueries can be used in a single query. */
-  @VisibleForTesting @NonFinalForTesting static int maxNumSubqueries = 30;
 
   public static final String PATH = "/_dr/admin/list/domains";
 

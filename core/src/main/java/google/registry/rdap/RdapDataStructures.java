@@ -41,14 +41,13 @@ final class RdapDataStructures {
       // Conformance to RFC 9083
       jsonArray.add("rdap_level_0");
 
-      // Conformance to the RDAP Response Profile V2.1
+      // Conformance to the RDAP Response Profile V2.2 (February 2024)
+      // (see section 1.2)
+      jsonArray.add("icann_rdap_response_profile_1");
+
+      // Conformance to the RDAP Technical Implementation Guide V2.2 (February 2024)
       // (see section 1.3)
-      jsonArray.add("icann_rdap_response_profile_0");
-
-      // Conformance to the RDAP Technical Implementation Guide V2.1
-      // (see section 1.14)
-      jsonArray.add("icann_rdap_technical_implementation_guide_0");
-
+      jsonArray.add("icann_rdap_technical_implementation_guide_1");
       return jsonArray;
     }
   }
@@ -119,7 +118,7 @@ final class RdapDataStructures {
    */
   @AutoValue
   @RestrictJsonNames("notices[]")
-  abstract static class Notice extends NoticeOrRemark {
+  public abstract static class Notice extends NoticeOrRemark {
 
     /**
      * Notice and Remark Type are defined in 10.2.1 of RFC 9083.
@@ -334,7 +333,6 @@ final class RdapDataStructures {
    */
   @RestrictJsonNames("status[]")
   enum RdapStatus implements Jsonable {
-
     // Status values specified in RFC 9083 § 10.2.2.
     VALIDATED("validated"),
     RENEW_PROHIBITED("renew prohibited"),

@@ -14,19 +14,25 @@
 
 package google.registry.rdap;
 
-import static com.google.common.base.Charsets.UTF_8;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.net.HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN;
 import static google.registry.request.Actions.getPathForAction;
+import static google.registry.util.DateTimeUtils.toInstant;
 import static google.registry.util.DomainNameUtils.canonicalizeHostname;
-import static javax.servlet.http.HttpServletResponse.SC_BAD_REQUEST;
-import static javax.servlet.http.HttpServletResponse.SC_INTERNAL_SERVER_ERROR;
-import static javax.servlet.http.HttpServletResponse.SC_OK;
+import static jakarta.servlet.http.HttpServletResponse.SC_BAD_REQUEST;
+import static jakarta.servlet.http.HttpServletResponse.SC_INTERNAL_SERVER_ERROR;
+import static jakarta.servlet.http.HttpServletResponse.SC_NOT_FOUND;
+import static jakarta.servlet.http.HttpServletResponse.SC_OK;
+import static java.nio.charset.StandardCharsets.UTF_8;
 
+import com.google.common.collect.Streams;
 import com.google.common.flogger.FluentLogger;
 import com.google.common.net.MediaType;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import google.registry.config.RegistryConfig.Config;
 import google.registry.model.EppResource;
 import google.registry.model.registrar.Registrar;
@@ -40,15 +46,17 @@ import google.registry.request.HttpException;
 import google.registry.request.Parameter;
 import google.registry.request.RequestMethod;
 import google.registry.request.RequestPath;
+import google.registry.request.RequestUrl;
 import google.registry.request.Response;
+import google.registry.util.Clock;
+import jakarta.inject.Inject;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.Optional;
-import javax.inject.Inject;
 import org.joda.time.DateTime;
 
 /**
- * Base RDAP (new WHOIS) action for all requests.
+ * Base RDAP action for all requests.
  *
  * @see <a href="https://tools.ietf.org/html/rfc9082">RFC 9082: Registration Data Access Protocol
  *     (RDAP) Query Format</a>
@@ -60,6 +68,10 @@ public abstract class RdapActionBase implements Runnable {
   private static final MediaType RESPONSE_MEDIA_TYPE =
       MediaType.create("application", "rdap+json").withCharset(UTF_8);
 
+  private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
+  private static final Gson FORMATTED_OUTPUT_GSON =
+      new GsonBuilder().disableHtmlEscaping().setPrettyPrinting().create();
+
   /** Whether to include or exclude deleted items from a query. */
   protected enum DeletedItemHandling {
     EXCLUDE,
@@ -69,12 +81,14 @@ public abstract class RdapActionBase implements Runnable {
   @Inject Response response;
   @Inject @RequestMethod Action.Method requestMethod;
   @Inject @RequestPath String requestPath;
+  @Inject @RequestUrl String requestUrl;
   @Inject RdapAuthorization rdapAuthorization;
   @Inject RdapJsonFormatter rdapJsonFormatter;
   @Inject @Parameter("includeDeleted") Optional<Boolean> includeDeletedParam;
   @Inject @Parameter("formatOutput") Optional<Boolean> formatOutputParam;
   @Inject @Config("rdapResultSetMaxSize") int rdapResultSetMaxSize;
   @Inject RdapMetrics rdapMetrics;
+  @Inject Clock clock;
 
   /** Builder for metric recording. */
   final RdapMetrics.RdapMetricInformation.Builder metricInformationBuilder =
@@ -125,7 +139,7 @@ public abstract class RdapActionBase implements Runnable {
     // RFC7480 4.2 - servers receiving an RDAP request return an entity with a Content-Type header
     // containing the RDAP-specific JSON media type.
     response.setContentType(RESPONSE_MEDIA_TYPE);
-    // RDAP Technical Implementation Guide 1.13 - when responding to RDAP valid requests, we MUST
+    // RDAP Technical Implementation Guide 1.14 - when responding to RDAP valid requests, we MUST
     // include the Access-Control-Allow-Origin, which MUST be "*" unless otherwise specified.
     response.setHeader(ACCESS_CONTROL_ALLOW_ORIGIN, "*");
     try {
@@ -152,6 +166,10 @@ public abstract class RdapActionBase implements Runnable {
       response.setStatus(SC_OK);
       setPayload(replyObject);
       metricInformationBuilder.setStatusCode(SC_OK);
+    } catch (RdapDomainAction.DomainBlockedByBsaException e) {
+      logger.atInfo().withCause(e).log("Domain blocked by BSA");
+      setErrorCodes(SC_NOT_FOUND);
+      setPayload(new RdapObjectClasses.DomainBlockedByBsaErrorResponse(e.getMessage()));
     } catch (HttpException e) {
       logger.atInfo().withCause(e).log("Error in RDAP.");
       setError(e.getResponseCode(), e.getResponseCodeString(), e.getMessage());
@@ -166,8 +184,7 @@ public abstract class RdapActionBase implements Runnable {
   }
 
   void setError(int status, String title, String description) {
-    metricInformationBuilder.setStatusCode(status);
-    response.setStatus(status);
+    setErrorCodes(status);
     try {
       setPayload(ErrorResponse.create(status, title, description));
     } catch (Exception ex) {
@@ -176,22 +193,21 @@ public abstract class RdapActionBase implements Runnable {
     }
   }
 
+  void setErrorCodes(int status) {
+    metricInformationBuilder.setStatusCode(status);
+    response.setStatus(status);
+  }
+
   void setPayload(ReplyPayloadBase replyObject) {
     if (requestMethod == Action.Method.HEAD) {
       return;
     }
-
-    GsonBuilder gsonBuilder = new GsonBuilder();
-    gsonBuilder.disableHtmlEscaping();
-    if (formatOutputParam.orElse(false)) {
-      gsonBuilder.setPrettyPrinting();
-    }
-    Gson gson = gsonBuilder.create();
-
     TopLevelReplyObject topLevelObject =
         TopLevelReplyObject.create(replyObject, rdapJsonFormatter.createTosNotice());
-
-    response.setPayload(gson.toJson(topLevelObject.toJson()));
+    Gson gson = formatOutputParam.orElse(false) ? FORMATTED_OUTPUT_GSON : GSON;
+    JsonObject jsonResult = topLevelObject.toJson();
+    addLinkValuesRecursively(jsonResult);
+    response.setPayload(gson.toJson(jsonResult));
   }
 
   /**
@@ -226,7 +242,7 @@ public abstract class RdapActionBase implements Runnable {
    * is authorized to do so.
    */
   boolean isAuthorized(EppResource eppResource) {
-    return getRequestTime().isBefore(eppResource.getDeletionTime())
+    return toInstant(getRequestTime()).isBefore(eppResource.getDeletionTime())
         || (shouldIncludeDeleted()
             && rdapAuthorization.isAuthorizedForRegistrar(
                 eppResource.getPersistedCurrentSponsorRegistrarId()));
@@ -257,4 +273,34 @@ public abstract class RdapActionBase implements Runnable {
     return rdapJsonFormatter.getRequestTime();
   }
 
+  /**
+   * Adds a request-referencing "value" to each link object.
+   *
+   * <p>This is the "context URI" as described in RFC 8288. Basically, this contains a reference to
+   * the request URL that generated this RDAP response.
+   *
+   * <p>This is required per the RDAP February 2024 response profile sections 2.6.3 and 2.10, and
+   * the technical implementation guide sections 3.2 and 3.3.2.
+   *
+   * <p>We must do this here (instead of where the links are generated) because many of the links
+   * (e.g. terms of service) are static constants, and thus cannot by default know what the request
+   * URL was.
+   */
+  private void addLinkValuesRecursively(JsonElement jsonElement) {
+    if (jsonElement instanceof JsonArray jsonArray) {
+      jsonArray.forEach(this::addLinkValuesRecursively);
+    } else if (jsonElement instanceof JsonObject jsonObject) {
+      if (jsonObject.get("links") instanceof JsonArray linksArray) {
+        addLinkValues(linksArray);
+      }
+      jsonObject.entrySet().forEach(entry -> addLinkValuesRecursively(entry.getValue()));
+    }
+  }
+
+  private void addLinkValues(JsonArray linksArray) {
+    Streams.stream(linksArray)
+        .map(JsonElement::getAsJsonObject)
+        .filter(o -> !o.has("value"))
+        .forEach(o -> o.addProperty("value", requestUrl));
+  }
 }

@@ -39,19 +39,16 @@ import google.registry.rdap.RdapDataStructures.RdapConformance;
 import google.registry.rdap.RdapDataStructures.RdapStatus;
 import google.registry.rdap.RdapDataStructures.Remark;
 import google.registry.util.Idn;
+import jakarta.servlet.http.HttpServletResponse;
 import java.util.Optional;
 
 /** Object Classes defined in RFC 9083 section 5. */
 final class RdapObjectClasses {
 
-  /**
-   * Temporary implementation of VCards.
-   *
-   * Will create a better implementation soon.
-   */
+  /** Rough implementation of VCards. */
   @RestrictJsonNames({})
   @AutoValue
-  abstract static class Vcard implements Jsonable {
+  public abstract static class Vcard implements Jsonable {
     abstract String property();
     abstract ImmutableMap<String, ImmutableList<String>> parameters();
     abstract String valueType();
@@ -94,7 +91,7 @@ final class RdapObjectClasses {
 
   @RestrictJsonNames("vcardArray")
   @AutoValue
-  abstract static class VcardArray implements Jsonable {
+  public abstract static class VcardArray implements Jsonable {
 
     private static final String VCARD_VERSION_NUMBER = "4.0";
     private static final Vcard VCARD_ENTRY_VERSION =
@@ -137,18 +134,30 @@ final class RdapObjectClasses {
    * suppress them for other types of responses (e.g. help).
    */
   public enum BoilerplateType {
-    DOMAIN,
-    NAMESERVER,
-    ENTITY,
-    OTHER
+    DOMAIN(RdapIcannStandardInformation.DOMAIN_BOILERPLATE_NOTICES),
+    DOMAIN_BLOCKED_BY_BSA(RdapIcannStandardInformation.DOMAIN_BLOCKED_BY_BSA_BOILERPLATE_NOTICES),
+    NAMESERVER(ImmutableList.of()),
+    ENTITY(ImmutableList.of()),
+    OTHER(ImmutableList.of());
+
+    @SuppressWarnings("ImmutableEnumChecker") // immutable lists are, in fact, immutable
+    private final ImmutableList<Notice> notices;
+
+    BoilerplateType(ImmutableList<Notice> notices) {
+      this.notices = notices;
+    }
+
+    public ImmutableList<Notice> getNotices() {
+      return notices;
+    }
   }
 
   /**
    * An object that can be used to create a TopLevelReply.
    *
-   * All Actions need to return an object of this type.
+   * <p>All Actions need to return an object of this type.
    */
-  abstract static class ReplyPayloadBase extends AbstractJsonableObject {
+  public abstract static class ReplyPayloadBase extends AbstractJsonableObject {
     final BoilerplateType boilerplateType;
 
     ReplyPayloadBase(BoilerplateType boilerplateType) {
@@ -160,12 +169,12 @@ final class RdapObjectClasses {
    * The Top Level JSON reply, Adds the required top-level boilerplate to a ReplyPayloadBase.
    *
    * <p>RFC 9083 specifies that the top-level object should include an entry indicating the
-   * conformance level. ICANN RDAP spec for 15feb19 mandates several additional entries, in sections
-   * 2.6.3, 2.11 of the Response Profile and 3.3, 3.5, of the Technical Implementation Guide.
+   * conformance level. The RDAP spec mandates several additional entries, in sections 2.6.3, 2.10
+   * of the Response Profile and 3.3, 3.5, of the Technical Implementation Guide.
    */
   @AutoValue
   @RestrictJsonNames({})
-  abstract static class TopLevelReplyObject extends AbstractJsonableObject {
+  public abstract static class TopLevelReplyObject extends AbstractJsonableObject {
     @JsonableElement("rdapConformance")
     static final RdapConformance RDAP_CONFORMANCE = RdapConformance.INSTANCE;
 
@@ -173,15 +182,7 @@ final class RdapObjectClasses {
     @JsonableElement("notices[]") abstract Notice aTosNotice();
 
     @JsonableElement("notices") ImmutableList<Notice> boilerplateNotices() {
-      switch (aAreplyObject().boilerplateType) {
-        case DOMAIN:
-          return RdapIcannStandardInformation.domainBoilerplateNotices;
-        case NAMESERVER:
-        case ENTITY:
-          return RdapIcannStandardInformation.nameserverAndEntityBoilerplateNotices;
-        default: // things other than domains, nameservers and entities do not yet have boilerplate
-          return ImmutableList.of();
-      }
+      return aAreplyObject().boilerplateType.getNotices();
     }
 
     static TopLevelReplyObject create(ReplyPayloadBase replyObject, Notice tosNotice) {
@@ -195,7 +196,9 @@ final class RdapObjectClasses {
    * <p>Not part of the spec, but seems convenient.
    */
   private abstract static class RdapObjectBase extends ReplyPayloadBase {
-    @JsonableElement final ObjectClassName objectClassName;
+    @SuppressWarnings("unused")
+    @JsonableElement
+    final ObjectClassName objectClassName;
 
     @JsonableElement abstract Optional<String> handle();
     @JsonableElement abstract ImmutableList<PublicId> publicIds();
@@ -250,13 +253,13 @@ final class RdapObjectClasses {
   /**
    * The Entity Object Class defined in 5.1 of RFC 9083.
    *
-   * <p>Entities are used both for Contacts and for Registrars. We will create different subobjects
-   * for each one for type safety.
+   * <p>Entities are used both for Registrar POCs and for Registrars. We will create different
+   * subobjects for each one for type safety.
    *
    * <p>We're missing the "autnums" and "networks" fields
    */
   @RestrictJsonNames({"entities[]", "entitySearchResults[]"})
-  abstract static class RdapEntity extends RdapObjectBase {
+  public abstract static class RdapEntity extends RdapObjectBase {
 
     /** Role values specified in RFC 9083 § 10.2.4. */
     @RestrictJsonNames("roles[]")
@@ -306,11 +309,11 @@ final class RdapObjectClasses {
   /**
    * Registrar version of the Entity Object Class defined in 5.1 of RFC 9083.
    *
-   * <p>Entities are used both for Contacts and for Registrars. We will create different subobjects
-   * for each one for type safety.
+   * <p>Entities are used both for Registrar POCs and for Registrars. We will create different
+   * subobjects for each one for type safety.
    */
   @AutoValue
-  abstract static class RdapRegistrarEntity extends RdapEntity {
+  public abstract static class RdapRegistrarEntity extends RdapEntity {
 
     static Builder builder() {
       return new AutoValue_RdapObjectClasses_RdapRegistrarEntity.Builder();
@@ -323,21 +326,21 @@ final class RdapObjectClasses {
   }
 
   /**
-   * Contact version of the Entity Object Class defined in 5.1 of RFC 9083.
+   * RegistrarPoc version of the Entity Object Class defined in 5.1 of RFC 9083.
    *
-   * <p>Entities are used both for Contacts and for Registrars. We will create different subobjects
-   * for each one for type safety.
+   * <p>Entities are used both for Registrar POCs and for Registrars. We will create different
+   * subobjects for each one for type safety.
    */
   @AutoValue
-  abstract static class RdapContactEntity extends RdapEntity {
+  public abstract static class RdapRegistrarPocEntity extends RdapEntity {
 
     static Builder builder() {
-      return new AutoValue_RdapObjectClasses_RdapContactEntity.Builder();
+      return new AutoValue_RdapObjectClasses_RdapRegistrarPocEntity.Builder();
     }
 
     @AutoValue.Builder
     abstract static class Builder extends RdapEntity.Builder<Builder> {
-      abstract RdapContactEntity build();
+      abstract RdapRegistrarPocEntity build();
     }
   }
 
@@ -346,7 +349,7 @@ final class RdapObjectClasses {
    *
    * <p>Takes care of the name and unicode field.
    *
-   * <p>See RDAP Response Profile 15feb19 sections 2.1 and 4.1.
+   * <p>See RDAP Response Profile sections 2.1 and 4.1.
    *
    * <p>Note the ldhName field is only required for non-IDN names or IDN names when the query was an
    * A-label. It is optional for IDN names when the query was a U-label. Because we don't want to
@@ -386,7 +389,7 @@ final class RdapObjectClasses {
   /** The Nameserver Object Class defined in 5.2 of RFC 9083. */
   @RestrictJsonNames({"nameservers[]", "nameserverSearchResults[]"})
   @AutoValue
-  abstract static class RdapNameserver extends RdapNamedObjectBase {
+  public abstract static class RdapNameserver extends RdapNamedObjectBase {
 
     @JsonableElement Optional<IpAddresses> ipAddresses() {
       if (ipv6().isEmpty() && ipv4().isEmpty()) {
@@ -428,7 +431,7 @@ final class RdapObjectClasses {
   /** Object defined in RFC 9083 section 5.3, only used for RdapDomain. */
   @RestrictJsonNames("secureDNS")
   @AutoValue
-  abstract static class SecureDns extends AbstractJsonableObject {
+  public abstract static class SecureDns extends AbstractJsonableObject {
     @RestrictJsonNames("dsData[]")
     @AutoValue
     abstract static class DsData extends AbstractJsonableObject {
@@ -464,7 +467,7 @@ final class RdapObjectClasses {
     }
 
     /**
-     * an integer representing the signature lifetime in seconds to be used when creating the RRSIG
+     * An integer representing the signature lifetime in seconds to be used when creating the RRSIG
      * DS record in the parent zone [RFC5910].
      *
      * <p>Note that although it isn't given as optional in RFC 9083, in RFC5910 it's mentioned as
@@ -506,7 +509,7 @@ final class RdapObjectClasses {
    */
   @RestrictJsonNames("domainSearchResults[]")
   @AutoValue
-  abstract static class RdapDomain extends RdapNamedObjectBase {
+  public abstract static class RdapDomain extends RdapNamedObjectBase {
 
     @JsonableElement abstract ImmutableList<RdapNameserver> nameservers();
 
@@ -531,10 +534,29 @@ final class RdapObjectClasses {
     }
   }
 
+  /** Specialized error response body for when a domain is blocked by BSA. */
+  @RestrictJsonNames({})
+  @SuppressWarnings("UnusedVariable")
+  public static class DomainBlockedByBsaErrorResponse extends ReplyPayloadBase {
+
+    @JsonableElement private static final LanguageIdentifier lang = LanguageIdentifier.EN;
+
+    @JsonableElement private static final int errorCode = HttpServletResponse.SC_NOT_FOUND;
+
+    @JsonableElement private static final String title = "Not Found";
+
+    @JsonableElement private final ImmutableList<String> description;
+
+    DomainBlockedByBsaErrorResponse(String message) {
+      super(BoilerplateType.DOMAIN_BLOCKED_BY_BSA);
+      this.description = ImmutableList.of(message);
+    }
+  }
+
   /** Error Response Body defined in 6 of RFC 9083. */
   @RestrictJsonNames({})
   @AutoValue
-  abstract static class ErrorResponse extends ReplyPayloadBase {
+  public abstract static class ErrorResponse extends ReplyPayloadBase {
 
     @JsonableElement final LanguageIdentifier lang = LanguageIdentifier.EN;
 
@@ -560,7 +582,7 @@ final class RdapObjectClasses {
    */
   @RestrictJsonNames({})
   @AutoValue
-  abstract static class HelpResponse extends ReplyPayloadBase {
+  public abstract static class HelpResponse extends ReplyPayloadBase {
     @JsonableElement("notices[]") abstract Optional<Notice> helpNotice();
 
     HelpResponse() {

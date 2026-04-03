@@ -16,15 +16,15 @@ package google.registry.persistence.converter;
 
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
-import static google.registry.testing.DatabaseHelper.insertInDb;
+import static google.registry.testing.DatabaseHelper.persistResource;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import google.registry.model.ImmutableObject;
 import google.registry.persistence.transaction.JpaTestExtensions;
 import google.registry.persistence.transaction.JpaTestExtensions.JpaUnitTestExtension;
-import javax.persistence.Entity;
-import javax.persistence.Id;
-import javax.persistence.PersistenceException;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Id;
+import jakarta.persistence.PersistenceException;
 import org.joda.money.CurrencyUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -39,7 +39,7 @@ public class CurrencyUnitConverterTest {
   @Test
   void roundTripConversion() {
     TestEntity entity = new TestEntity(CurrencyUnit.EUR);
-    insertInDb(entity);
+    persistResource(entity);
     assertThat(
             tm().transact(
                     () ->

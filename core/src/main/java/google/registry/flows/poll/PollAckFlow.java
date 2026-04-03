@@ -31,15 +31,17 @@ import google.registry.flows.EppException.RequiredParameterMissingException;
 import google.registry.flows.ExtensionManager;
 import google.registry.flows.FlowModule.PollMessageId;
 import google.registry.flows.FlowModule.RegistrarId;
-import google.registry.flows.TransactionalFlow;
+import google.registry.flows.MutatingFlow;
 import google.registry.model.eppoutput.EppResponse;
 import google.registry.model.poll.MessageQueueInfo;
 import google.registry.model.poll.PollMessage;
 import google.registry.model.poll.PollMessageExternalKeyConverter;
 import google.registry.model.poll.PollMessageExternalKeyConverter.PollMessageExternalKeyParseException;
+import google.registry.persistence.IsolationLevel;
+import google.registry.persistence.PersistenceModule.TransactionIsolationLevel;
 import google.registry.persistence.VKey;
+import jakarta.inject.Inject;
 import java.util.Optional;
-import javax.inject.Inject;
 import org.joda.time.DateTime;
 
 /**
@@ -55,7 +57,8 @@ import org.joda.time.DateTime;
  * @error {@link PollAckFlow.MissingMessageIdException}
  * @error {@link PollAckFlow.NotAuthorizedToAckMessageException}
  */
-public final class PollAckFlow implements TransactionalFlow {
+@IsolationLevel(value = TransactionIsolationLevel.TRANSACTION_READ_COMMITTED)
+public final class PollAckFlow implements MutatingFlow {
 
   @Inject ExtensionManager extensionManager;
   @Inject @RegistrarId String registrarId;
@@ -86,7 +89,7 @@ public final class PollAckFlow implements TransactionalFlow {
     // it as if it doesn't exist yet. Same for if the message ID year isn't the same as the actual
     // poll message's event time (that means they're passing in an old already-acked ID).
     Optional<PollMessage> maybePollMessage = tm().loadByKeyIfPresent(pollMessageKey);
-    if (!maybePollMessage.isPresent()
+    if (maybePollMessage.isEmpty()
         || !isBeforeOrAt(maybePollMessage.get().getEventTime(), now)
         || !makePollMessageExternalId(maybePollMessage.get()).equals(messageId)) {
       throw new MessageDoesNotExistException(messageId);

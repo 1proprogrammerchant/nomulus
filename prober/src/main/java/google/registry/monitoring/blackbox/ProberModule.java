@@ -20,7 +20,6 @@ import dagger.Provides;
 import google.registry.monitoring.blackbox.connection.ProbingAction;
 import google.registry.monitoring.blackbox.module.CertificateModule;
 import google.registry.monitoring.blackbox.module.EppModule;
-import google.registry.monitoring.blackbox.module.WebWhoisModule;
 import google.registry.networking.handler.SslClientInitializer;
 import google.registry.util.Clock;
 import google.registry.util.SystemClock;
@@ -31,8 +30,8 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.ssl.OpenSsl;
 import io.netty.handler.ssl.SslProvider;
+import jakarta.inject.Singleton;
 import java.util.Set;
-import javax.inject.Singleton;
 import org.joda.time.Duration;
 
 /**
@@ -102,13 +101,10 @@ public class ProberModule {
   @Component(
       modules = {
         ProberModule.class,
-        WebWhoisModule.class,
         EppModule.class,
         CertificateModule.class
       })
   public interface ProberComponent {
-
-    // Standard WebWhois sequence
     Set<ProbingSequence> sequences();
   }
 }

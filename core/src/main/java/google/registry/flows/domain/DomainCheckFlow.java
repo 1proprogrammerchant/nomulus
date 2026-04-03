@@ -14,10 +14,10 @@
 
 package google.registry.flows.domain;
 
-import static com.google.common.base.Strings.emptyToNull;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
+import static google.registry.bsa.persistence.BsaLabelUtils.getBlockedLabels;
 import static google.registry.flows.FlowUtils.validateRegistrarIsLoggedIn;
 import static google.registry.flows.ResourceFlowUtils.verifyTargetIdCount;
 import static google.registry.flows.domain.DomainFlowUtils.checkAllowedAccessToTld;
@@ -25,39 +25,37 @@ import static google.registry.flows.domain.DomainFlowUtils.checkHasBillingAccoun
 import static google.registry.flows.domain.DomainFlowUtils.getReservationTypes;
 import static google.registry.flows.domain.DomainFlowUtils.handleFeeRequest;
 import static google.registry.flows.domain.DomainFlowUtils.isAnchorTenant;
+import static google.registry.flows.domain.DomainFlowUtils.isRegisterBsaCreate;
 import static google.registry.flows.domain.DomainFlowUtils.isReserved;
 import static google.registry.flows.domain.DomainFlowUtils.isValidReservedCreate;
 import static google.registry.flows.domain.DomainFlowUtils.validateDomainName;
 import static google.registry.flows.domain.DomainFlowUtils.validateDomainNameWithIdnTables;
 import static google.registry.flows.domain.DomainFlowUtils.verifyNotInPredelegation;
 import static google.registry.model.tld.Tld.TldState.START_DATE_SUNRISE;
+import static google.registry.model.tld.Tld.isEnrolledWithBsa;
 import static google.registry.model.tld.label.ReservationType.getTypeOfHighestSeverity;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
 
+import com.google.common.collect.ImmutableCollection;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Maps;
+import com.google.common.flogger.FluentLogger;
 import com.google.common.net.InternetDomainName;
+import google.registry.config.RegistryConfig;
 import google.registry.config.RegistryConfig.Config;
 import google.registry.flows.EppException;
 import google.registry.flows.EppException.ParameterValuePolicyErrorException;
 import google.registry.flows.ExtensionManager;
-import google.registry.flows.Flow;
 import google.registry.flows.FlowModule.RegistrarId;
 import google.registry.flows.FlowModule.Superuser;
+import google.registry.flows.TransactionalFlow;
 import google.registry.flows.annotations.ReportingSpec;
 import google.registry.flows.custom.DomainCheckFlowCustomLogic;
 import google.registry.flows.custom.DomainCheckFlowCustomLogic.BeforeResponseParameters;
 import google.registry.flows.custom.DomainCheckFlowCustomLogic.BeforeResponseReturnData;
-import google.registry.flows.domain.DomainPricingLogic.AllocationTokenInvalidForPremiumNameException;
-import google.registry.flows.domain.token.AllocationTokenDomainCheckResults;
 import google.registry.flows.domain.token.AllocationTokenFlowUtils;
-import google.registry.flows.domain.token.AllocationTokenFlowUtils.AllocationTokenNotInPromotionException;
-import google.registry.flows.domain.token.AllocationTokenFlowUtils.AllocationTokenNotValidForCommandException;
-import google.registry.flows.domain.token.AllocationTokenFlowUtils.AllocationTokenNotValidForDomainException;
-import google.registry.flows.domain.token.AllocationTokenFlowUtils.AllocationTokenNotValidForRegistrarException;
-import google.registry.flows.domain.token.AllocationTokenFlowUtils.AllocationTokenNotValidForTldException;
 import google.registry.model.EppResource;
 import google.registry.model.ForeignKeyUtils;
 import google.registry.model.billing.BillingRecurrence;
@@ -66,7 +64,7 @@ import google.registry.model.domain.DomainCommand.Check;
 import google.registry.model.domain.fee.FeeCheckCommandExtension;
 import google.registry.model.domain.fee.FeeCheckCommandExtensionItem;
 import google.registry.model.domain.fee.FeeCheckResponseExtensionItem;
-import google.registry.model.domain.fee.FeeQueryCommandExtensionItem.CommandName;
+import google.registry.model.domain.fee.FeeQueryCommandExtensionItem;
 import google.registry.model.domain.fee06.FeeCheckCommandExtensionV06;
 import google.registry.model.domain.launch.LaunchCheckExtension;
 import google.registry.model.domain.token.AllocationToken;
@@ -82,12 +80,15 @@ import google.registry.model.tld.Tld;
 import google.registry.model.tld.Tld.TldState;
 import google.registry.model.tld.label.ReservationType;
 import google.registry.persistence.VKey;
-import google.registry.pricing.PricingEngineProxy;
 import google.registry.util.Clock;
+import jakarta.inject.Inject;
+import java.util.Collection;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import javax.inject.Inject;
+import java.util.stream.Collectors;
+import org.joda.money.CurrencyUnit;
 import org.joda.time.DateTime;
 
 /**
@@ -121,7 +122,12 @@ import org.joda.time.DateTime;
  * @error {@link OnlyCheckedNamesCanBeFeeCheckedException}
  */
 @ReportingSpec(ActivityReportField.DOMAIN_CHECK)
-public final class DomainCheckFlow implements Flow {
+public final class DomainCheckFlow implements TransactionalFlow {
+
+  private static final FluentLogger logger = FluentLogger.forEnclosingClass();
+
+  private static final String STANDARD_FEE_RESPONSE_CLASS = "STANDARD";
+  private static final String STANDARD_PROMOTION_FEE_RESPONSE_CLASS = "STANDARD PROMOTION";
 
   @Inject ResourceCommand resourceCommand;
   @Inject ExtensionManager extensionManager;
@@ -135,7 +141,6 @@ public final class DomainCheckFlow implements Flow {
   @Inject @Superuser boolean isSuperuser;
   @Inject Clock clock;
   @Inject EppResponse.Builder responseBuilder;
-  @Inject AllocationTokenFlowUtils allocationTokenFlowUtils;
   @Inject DomainCheckFlowCustomLogic flowCustomLogic;
   @Inject DomainPricingLogic pricingLogic;
 
@@ -177,37 +182,23 @@ public final class DomainCheckFlow implements Flow {
             .setAsOfDate(now)
             .build());
     ImmutableMap<String, VKey<Domain>> existingDomains =
-        ForeignKeyUtils.load(Domain.class, domainNames, now);
-    Optional<AllocationTokenExtension> allocationTokenExtension =
-        eppInput.getSingleExtension(AllocationTokenExtension.class);
-    Optional<AllocationTokenDomainCheckResults> tokenDomainCheckResults =
-        allocationTokenExtension.map(
-            tokenExtension ->
-                allocationTokenFlowUtils.checkDomainsWithToken(
-                    ImmutableList.copyOf(parsedDomains.values()),
-                    tokenExtension.getAllocationToken(),
-                    registrarId,
-                    now));
+        ForeignKeyUtils.loadKeys(Domain.class, domainNames, now);
+    // Check block labels only when there are unregistered domains, since "In use" goes before
+    // "Blocked by BSA".
+    ImmutableSet<InternetDomainName> bsaBlockedDomainNames =
+        existingDomains.size() == parsedDomains.size()
+            ? ImmutableSet.of()
+            : getBsaBlockedDomains(parsedDomains.values(), now);
 
     ImmutableList.Builder<DomainCheck> checksBuilder = new ImmutableList.Builder<>();
     ImmutableSet.Builder<String> availableDomains = new ImmutableSet.Builder<>();
     ImmutableMap<String, TldState> tldStates =
         Maps.toMap(seenTlds, tld -> Tld.get(tld).getTldState(now));
-    ImmutableMap<InternetDomainName, String> domainCheckResults =
-        tokenDomainCheckResults
-            .map(AllocationTokenDomainCheckResults::domainCheckResults)
-            .orElse(ImmutableMap.of());
-    Optional<AllocationToken> allocationToken =
-        tokenDomainCheckResults.flatMap(AllocationTokenDomainCheckResults::token);
     for (String domainName : domainNames) {
       Optional<String> message =
           getMessageForCheck(
-              parsedDomains.get(domainName),
-              existingDomains,
-              domainCheckResults,
-              tldStates,
-              allocationToken);
-      boolean isAvailable = !message.isPresent();
+              domainName, existingDomains, bsaBlockedDomainNames, tldStates, parsedDomains, now);
+      boolean isAvailable = message.isEmpty();
       checksBuilder.add(DomainCheck.create(isAvailable, domainName, message.orElse(null)));
       if (isAvailable) {
         availableDomains.add(domainName);
@@ -219,11 +210,7 @@ public final class DomainCheckFlow implements Flow {
                 .setDomainChecks(checksBuilder.build())
                 .setResponseExtensions(
                     getResponseExtensions(
-                        parsedDomains,
-                        existingDomains,
-                        availableDomains.build(),
-                        now,
-                        allocationToken))
+                        parsedDomains, existingDomains, availableDomains.build(), now))
                 .setAsOfDate(now)
                 .build());
     return responseBuilder
@@ -233,9 +220,42 @@ public final class DomainCheckFlow implements Flow {
   }
 
   private Optional<String> getMessageForCheck(
+      String domainName,
+      ImmutableMap<String, VKey<Domain>> existingDomains,
+      ImmutableSet<InternetDomainName> bsaBlockedDomainNames,
+      ImmutableMap<String, TldState> tldStates,
+      ImmutableMap<String, InternetDomainName> parsedDomains,
+      DateTime now)
+      throws EppException {
+    InternetDomainName idn = parsedDomains.get(domainName);
+    Optional<AllocationToken> token;
+    try {
+      // Which token we use may vary based on the domain -- a provided token may be invalid for
+      // some domains, or there may be DEFAULT PROMO tokens only applicable on some domains
+      token =
+          AllocationTokenFlowUtils.loadTokenFromExtensionOrGetDefault(
+              registrarId,
+              now,
+              eppInput.getSingleExtension(AllocationTokenExtension.class),
+              Tld.get(idn.parent().toString()),
+              domainName,
+              FeeQueryCommandExtensionItem.CommandName.CREATE,
+              Optional.empty(),
+              pricingLogic);
+    } catch (AllocationTokenFlowUtils.NonexistentAllocationTokenException
+        | AllocationTokenFlowUtils.AllocationTokenInvalidException e) {
+      // The provided token was catastrophically invalid in some way
+      logger.atInfo().withCause(e).log("Cannot load/use allocation token.");
+      return Optional.of(e.getMessage());
+    }
+    return getMessageForCheckWithToken(
+        idn, existingDomains, bsaBlockedDomainNames, tldStates, token);
+  }
+
+  private Optional<String> getMessageForCheckWithToken(
       InternetDomainName domainName,
       ImmutableMap<String, VKey<Domain>> existingDomains,
-      ImmutableMap<InternetDomainName, String> tokenCheckResults,
+      ImmutableSet<InternetDomainName> bsaBlockedDomains,
       ImmutableMap<String, TldState> tldStates,
       Optional<AllocationToken> allocationToken) {
     if (existingDomains.containsKey(domainName.toString())) {
@@ -252,7 +272,13 @@ public final class DomainCheckFlow implements Flow {
         }
       }
     }
-    return Optional.ofNullable(emptyToNull(tokenCheckResults.get(domainName)));
+    if (isRegisterBsaCreate(domainName, allocationToken)
+        || !bsaBlockedDomains.contains(domainName)) {
+      return Optional.empty();
+    }
+    // TODO(weiminyu): extract to a constant for here and CheckApiAction.
+    // Excerpt from BSA's custom message. Max len 32 chars by EPP XML schema.
+    return Optional.of("Blocked by a GlobalBlock service");
   }
 
   /** Handle the fee check extension. */
@@ -260,63 +286,46 @@ public final class DomainCheckFlow implements Flow {
       ImmutableMap<String, InternetDomainName> domainNames,
       ImmutableMap<String, VKey<Domain>> existingDomains,
       ImmutableSet<String> availableDomains,
-      DateTime now,
-      Optional<AllocationToken> allocationToken)
+      DateTime now)
       throws EppException {
     Optional<FeeCheckCommandExtension> feeCheckOpt =
         eppInput.getSingleExtension(FeeCheckCommandExtension.class);
-    if (!feeCheckOpt.isPresent()) {
+    if (feeCheckOpt.isEmpty()) {
       return ImmutableList.of(); // No fee checks were requested.
     }
     FeeCheckCommandExtension<?, ?> feeCheck = feeCheckOpt.get();
     ImmutableList.Builder<FeeCheckResponseExtensionItem> responseItems =
         new ImmutableList.Builder<>();
     ImmutableMap<String, Domain> domainObjs =
-        loadDomainsForRestoreChecks(feeCheck, domainNames, existingDomains);
+        loadDomainsForChecks(feeCheck, domainNames, existingDomains);
     ImmutableMap<String, BillingRecurrence> recurrences = loadRecurrencesForDomains(domainObjs);
 
+    boolean shouldUseTieredPricingPromotion =
+        RegistryConfig.getTieredPricingPromotionRegistrarIds().contains(registrarId);
+    ImmutableSet.Builder<CurrencyUnit> currenciesBuilder = new ImmutableSet.Builder<>();
     for (FeeCheckCommandExtensionItem feeCheckItem : feeCheck.getItems()) {
       for (String domainName : getDomainNamesToCheckForFee(feeCheckItem, domainNames.keySet())) {
-        Optional<AllocationToken> defaultToken =
-            DomainFlowUtils.checkForDefaultToken(
-                Tld.get(InternetDomainName.from(domainName).parent().toString()),
-                domainName,
-                feeCheckItem.getCommandName(),
-                registrarId,
-                now);
         FeeCheckResponseExtensionItem.Builder<?> builder = feeCheckItem.createResponseBuilder();
         Optional<Domain> domain = Optional.ofNullable(domainObjs.get(domainName));
+        Tld tld = Tld.get(domainNames.get(domainName).parent().toString());
+        currenciesBuilder.add(tld.getCurrency());
+        Optional<AllocationToken> token;
         try {
-          if (allocationToken.isPresent()) {
-            AllocationTokenFlowUtils.validateToken(
-                InternetDomainName.from(domainName),
-                allocationToken.get(),
-                feeCheckItem.getCommandName(),
-                registrarId,
-                PricingEngineProxy.isDomainPremium(domainName, now),
-                now);
-          }
-          handleFeeRequest(
-              feeCheckItem,
-              builder,
-              domainNames.get(domainName),
-              domain,
-              feeCheck.getCurrency(),
-              now,
-              pricingLogic,
-              allocationToken.isPresent() ? allocationToken : defaultToken,
-              availableDomains.contains(domainName),
-              recurrences.getOrDefault(domainName, null));
-          responseItems.add(builder.setDomainNameIfSupported(domainName).build());
-        } catch (AllocationTokenInvalidForPremiumNameException
-            | AllocationTokenNotValidForCommandException
-            | AllocationTokenNotValidForDomainException
-            | AllocationTokenNotValidForRegistrarException
-            | AllocationTokenNotValidForTldException
-            | AllocationTokenNotInPromotionException e) {
-          // Allocation token is either not an active token or it is not valid for the EPP command,
-          // registrar, domain, or TLD.
-          Tld tld = Tld.get(InternetDomainName.from(domainName).parent().toString());
+          // The precise token to use for this fee request may vary based on the domain or even the
+          // precise command issued (some tokens may be valid only for certain actions)
+          token =
+              AllocationTokenFlowUtils.loadTokenFromExtensionOrGetDefault(
+                  registrarId,
+                  now,
+                  eppInput.getSingleExtension(AllocationTokenExtension.class),
+                  tld,
+                  domainName,
+                  feeCheckItem.getCommandName(),
+                  Optional.empty(),
+                  pricingLogic);
+        } catch (AllocationTokenFlowUtils.NonexistentAllocationTokenException
+            | AllocationTokenFlowUtils.AllocationTokenInvalidException e) {
+          // The provided token was catastrophically invalid in some way
           responseItems.add(
               builder
                   .setDomainNameIfSupported(domainName)
@@ -328,24 +337,81 @@ public final class DomainCheckFlow implements Flow {
                   .setCurrencyIfSupported(tld.getCurrency())
                   .setClass("token-not-supported")
                   .build());
+          continue;
         }
+        handleFeeRequest(
+            feeCheckItem,
+            builder,
+            domainNames.get(domainName),
+            domain,
+            feeCheck.getCurrency(),
+            now,
+            pricingLogic,
+            token,
+            availableDomains.contains(domainName),
+            recurrences.getOrDefault(domainName, null));
+        // In the case of a registrar that is running a tiered pricing promotion, we issue two
+        // responses for the CREATE fee check command: one (the default response) with the
+        // non-promotional price, and one (an extra STANDARD PROMO response) with the actual
+        // promotional price.
+        if (token
+                .map(t -> t.getTokenType().equals(AllocationToken.TokenType.DEFAULT_PROMO))
+                .orElse(false)
+            && shouldUseTieredPricingPromotion
+            && feeCheckItem
+                .getCommandName()
+                .equals(FeeQueryCommandExtensionItem.CommandName.CREATE)) {
+          // First, set the promotional (real) price under the STANDARD PROMO class
+          builder
+              .setClass(STANDARD_PROMOTION_FEE_RESPONSE_CLASS)
+              .setCommand(
+                  FeeQueryCommandExtensionItem.CommandName.CUSTOM,
+                  feeCheckItem.getPhase(),
+                  feeCheckItem.getSubphase());
+
+          // Next, get the non-promotional price and set it as the standard response to the CREATE
+          // fee check command
+          FeeCheckResponseExtensionItem.Builder<?> nonPromotionalBuilder =
+              feeCheckItem.createResponseBuilder();
+          handleFeeRequest(
+              feeCheckItem,
+              nonPromotionalBuilder,
+              domainNames.get(domainName),
+              domain,
+              feeCheck.getCurrency(),
+              now,
+              pricingLogic,
+              Optional.empty(),
+              availableDomains.contains(domainName),
+              recurrences.getOrDefault(domainName, null));
+          responseItems.add(
+              nonPromotionalBuilder
+                  .setClass(STANDARD_FEE_RESPONSE_CLASS)
+                  .setDomainNameIfSupported(domainName)
+                  .build());
+        }
+        responseItems.add(builder.setDomainNameIfSupported(domainName).build());
       }
     }
-    return ImmutableList.of(feeCheck.createResponse(responseItems.build()));
+    return ImmutableList.of(
+        feeCheck.createResponse(responseItems.build(), currenciesBuilder.build()));
   }
 
   /**
-   * Loads and returns all existing domains that are having restore fees checked.
+   * Loads and returns all existing domains that are having restore/renew/transfer fees checked.
    *
-   * <p>This is necessary so that we can check their expiration dates to determine if a one-year
-   * renewal is part of the cost of a restore.
+   * <p>These need to be loaded for renews and transfers because there could be a relevant {@link
+   * google.registry.model.billing.BillingBase.RenewalPriceBehavior} on the {@link
+   * BillingRecurrence} affecting the price. They also need to be loaded for restores so that we can
+   * check their expiration dates to determine if a one-year renewal is part of the cost of a
+   * restore.
    *
    * <p>This may be resource-intensive for large checks of many restore fees, but those are
    * comparatively rare, and we are at least using an in-memory cache. Also, this will get a lot
    * nicer in Cloud SQL when we can SELECT just the fields we want rather than having to load the
    * entire entity.
    */
-  private ImmutableMap<String, Domain> loadDomainsForRestoreChecks(
+  private ImmutableMap<String, Domain> loadDomainsForChecks(
       FeeCheckCommandExtension<?, ?> feeCheck,
       ImmutableMap<String, InternetDomainName> domainNames,
       ImmutableMap<String, VKey<Domain>> existingDomains) {
@@ -354,18 +420,18 @@ public final class DomainCheckFlow implements Flow {
       // The V06 fee extension supports specifying the command fees to check on a per-domain basis.
       restoreCheckDomains =
           feeCheck.getItems().stream()
-              .filter(fc -> fc.getCommandName() == CommandName.RESTORE)
+              .filter(fc -> fc.getCommandName().shouldLoadDomainForCheck())
               .map(FeeCheckCommandExtensionItem::getDomainName)
               .distinct()
               .collect(toImmutableList());
     } else if (feeCheck.getItems().stream()
-        .anyMatch(fc -> fc.getCommandName() == CommandName.RESTORE)) {
+        .anyMatch(fc -> fc.getCommandName().shouldLoadDomainForCheck())) {
       // The more recent fee extension versions support specifying the command fees to check only on
       // the overall domain check, not per-domain.
       restoreCheckDomains = ImmutableList.copyOf(domainNames.keySet());
     } else {
-      // Fall-through case for more recent fee extension versions when the restore fee isn't being
-      // checked.
+      // Fall-through case for more recent fee extension versions when the restore/renew/transfer
+      // fees aren't being checked.
       restoreCheckDomains = ImmutableList.of();
     }
 
@@ -375,24 +441,20 @@ public final class DomainCheckFlow implements Flow {
             .filter(existingDomains::containsKey)
             .collect(toImmutableMap(d -> d, existingDomains::get));
     ImmutableMap<VKey<? extends EppResource>, EppResource> loadedDomains =
-        EppResource.loadCached(ImmutableList.copyOf(existingDomainsToLoad.values()));
+        EppResource.loadByCacheIfEnabled(ImmutableList.copyOf(existingDomainsToLoad.values()));
     return ImmutableMap.copyOf(
         Maps.transformEntries(existingDomainsToLoad, (k, v) -> (Domain) loadedDomains.get(v)));
   }
 
   private ImmutableMap<String, BillingRecurrence> loadRecurrencesForDomains(
       ImmutableMap<String, Domain> domainObjs) {
-    return tm().transact(
-            () -> {
-              ImmutableMap<VKey<? extends BillingRecurrence>, BillingRecurrence> recurrences =
-                  tm().loadByKeys(
-                          domainObjs.values().stream()
-                              .map(Domain::getAutorenewBillingEvent)
-                              .collect(toImmutableSet()));
-              return ImmutableMap.copyOf(
-                  Maps.transformValues(
-                      domainObjs, d -> recurrences.get(d.getAutorenewBillingEvent())));
-            });
+    ImmutableMap<VKey<? extends BillingRecurrence>, BillingRecurrence> recurrences =
+        tm().loadByKeys(
+                domainObjs.values().stream()
+                    .map(Domain::getAutorenewBillingEvent)
+                    .collect(toImmutableSet()));
+    return ImmutableMap.copyOf(
+        Maps.transformValues(domainObjs, d -> recurrences.get(d.getAutorenewBillingEvent())));
   }
 
   /**
@@ -415,6 +477,23 @@ public final class DomainCheckFlow implements Flow {
     }
     // If this version of the fee extension is nameless, use the full list of domains.
     return availabilityCheckDomains;
+  }
+
+  static ImmutableSet<InternetDomainName> getBsaBlockedDomains(
+      ImmutableCollection<InternetDomainName> parsedDomains, DateTime now) {
+    Map<String, ImmutableList<InternetDomainName>> labelToDomainNames =
+        parsedDomains.stream()
+            .filter(
+                parsedDomain -> isEnrolledWithBsa(Tld.get(parsedDomain.parent().toString()), now))
+            .collect(
+                Collectors.groupingBy(
+                    parsedDomain -> parsedDomain.parts().get(0), toImmutableList()));
+    ImmutableSet<String> blockedLabels =
+        getBlockedLabels(ImmutableList.copyOf(labelToDomainNames.keySet()));
+    labelToDomainNames.keySet().retainAll(blockedLabels);
+    return labelToDomainNames.values().stream()
+        .flatMap(Collection::stream)
+        .collect(toImmutableSet());
   }
 
   /** By server policy, fee check names must be listed in the availability check. */

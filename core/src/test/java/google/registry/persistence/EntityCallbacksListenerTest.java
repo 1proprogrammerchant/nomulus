@@ -18,26 +18,26 @@ import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
-import static google.registry.testing.DatabaseHelper.insertInDb;
+import static google.registry.testing.DatabaseHelper.persistResource;
 
 import com.google.common.collect.ImmutableSet;
 import google.registry.model.ImmutableObject;
+import google.registry.persistence.EntityCallbacksListener.RecursivePostLoad;
+import google.registry.persistence.EntityCallbacksListener.RecursivePostPersist;
+import google.registry.persistence.EntityCallbacksListener.RecursivePostRemove;
+import google.registry.persistence.EntityCallbacksListener.RecursivePostUpdate;
+import google.registry.persistence.EntityCallbacksListener.RecursivePrePersist;
+import google.registry.persistence.EntityCallbacksListener.RecursivePreRemove;
+import google.registry.persistence.EntityCallbacksListener.RecursivePreUpdate;
 import google.registry.persistence.transaction.JpaTestExtensions;
 import google.registry.persistence.transaction.JpaTestExtensions.JpaUnitTestExtension;
+import jakarta.persistence.Embeddable;
+import jakarta.persistence.Embedded;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Id;
+import jakarta.persistence.MappedSuperclass;
+import jakarta.persistence.Transient;
 import java.lang.reflect.Method;
-import javax.persistence.Embeddable;
-import javax.persistence.Embedded;
-import javax.persistence.Entity;
-import javax.persistence.Id;
-import javax.persistence.MappedSuperclass;
-import javax.persistence.PostLoad;
-import javax.persistence.PostPersist;
-import javax.persistence.PostRemove;
-import javax.persistence.PostUpdate;
-import javax.persistence.PrePersist;
-import javax.persistence.PreRemove;
-import javax.persistence.PreUpdate;
-import javax.persistence.Transient;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
@@ -51,7 +51,7 @@ class EntityCallbacksListenerTest {
   @Test
   void verifyAllCallbacks_executedExpectedTimes() {
     TestEntity testPersist = new TestEntity();
-    insertInDb(testPersist);
+    tm().transact(() -> tm().insert(testPersist));
     checkAll(testPersist, 1, 0, 0, 0);
 
     TestEntity testUpdate = new TestEntity();
@@ -99,7 +99,7 @@ class EntityCallbacksListenerTest {
 
   @Test
   void verifyCallbacksNotCalledOnCommit() {
-    insertInDb(new TestEntity());
+    persistResource(new TestEntity());
 
     TestEntity testLoad = tm().transact(() -> tm().loadByKey(VKey.create(TestEntity.class, "id")));
     assertThat(testLoad.entityPreUpdate).isEqualTo(0);
@@ -173,13 +173,13 @@ class EntityCallbacksListenerTest {
 
     @Embedded EntityEmbedded entityEmbedded = new EntityEmbedded();
 
-    @PostLoad
+    @RecursivePostLoad
     void entityPostLoad() {
       entityPostLoad++;
       nonTransientField++;
     }
 
-    @PreUpdate
+    @RecursivePreUpdate
     void entityPreUpdate() {
       entityPreUpdate++;
     }
@@ -193,8 +193,8 @@ class EntityCallbacksListenerTest {
 
     String entityEmbedded = "placeholder";
 
-    @PostLoad
-    void entityEmbeddedPrePersist() {
+    @RecursivePostLoad
+    void entityEmbeddedPostLoad() {
       entityEmbeddedPostLoad++;
     }
   }
@@ -205,7 +205,7 @@ class EntityCallbacksListenerTest {
 
     String entityEmbeddedParent = "placeholder";
 
-    @PostLoad
+    @RecursivePostLoad
     void entityEmbeddedParentPostLoad() {
       entityEmbeddedParentPostLoad++;
     }
@@ -223,37 +223,37 @@ class EntityCallbacksListenerTest {
 
     String entityEmbeddedNested = "placeholder";
 
-    @PrePersist
+    @RecursivePrePersist
     void entityEmbeddedNestedPrePersist() {
       entityEmbeddedNestedPrePersist++;
     }
 
-    @PreRemove
+    @RecursivePreRemove
     void entityEmbeddedNestedPreRemove() {
       entityEmbeddedNestedPreRemove++;
     }
 
-    @PostPersist
+    @RecursivePostPersist
     void entityEmbeddedNestedPostPersist() {
       entityEmbeddedNestedPostPersist++;
     }
 
-    @PostRemove
+    @RecursivePostRemove
     void entityEmbeddedNestedPostRemove() {
       entityEmbeddedNestedPostRemove++;
     }
 
-    @PreUpdate
+    @RecursivePreUpdate
     void entityEmbeddedNestedPreUpdate() {
       entityEmbeddedNestedPreUpdate++;
     }
 
-    @PostUpdate
+    @RecursivePostUpdate
     void entityEmbeddedNestedPostUpdate() {
       entityEmbeddedNestedPostUpdate++;
     }
 
-    @PostLoad
+    @RecursivePostLoad
     void entityEmbeddedNestedPostLoad() {
       entityEmbeddedNestedPostLoad++;
     }
@@ -267,12 +267,12 @@ class EntityCallbacksListenerTest {
 
     String parentEntity = "placeholder";
 
-    @PostLoad
+    @RecursivePostLoad
     void parentPostLoad() {
       parentPostLoad++;
     }
 
-    @PrePersist
+    @RecursivePrePersist
     void parentPrePersist() {
       parentPrePersist++;
     }
@@ -286,7 +286,7 @@ class EntityCallbacksListenerTest {
 
     @Embedded ParentEmbeddedNested parentEmbeddedNested = new ParentEmbeddedNested();
 
-    @PostLoad
+    @RecursivePostLoad
     void parentEmbeddedPostLoad() {
       parentEmbeddedPostLoad++;
     }
@@ -298,7 +298,7 @@ class EntityCallbacksListenerTest {
 
     String parentEmbeddedNested = "placeholder";
 
-    @PostLoad
+    @RecursivePostLoad
     void parentEmbeddedNestedPostLoad() {
       parentEmbeddedNestedPostLoad++;
     }
@@ -310,7 +310,7 @@ class EntityCallbacksListenerTest {
 
     String parentEmbeddedParent = "placeholder";
 
-    @PostLoad
+    @RecursivePostLoad
     void parentEmbeddedParentPostLoad() {
       parentEmbeddedParentPostLoad++;
     }

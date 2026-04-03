@@ -24,6 +24,7 @@ import static google.registry.util.CollectionUtils.union;
 import static google.registry.util.DateTimeUtils.START_OF_TIME;
 import static google.registry.util.DateTimeUtils.earliestOf;
 import static google.registry.util.DateTimeUtils.latestOf;
+import static google.registry.util.DateTimeUtils.toInstant;
 import static org.apache.beam.sdk.values.TypeDescriptors.voids;
 
 import com.google.common.collect.ImmutableMap;
@@ -36,7 +37,6 @@ import google.registry.config.RegistryConfig.ConfigModule;
 import google.registry.flows.custom.CustomLogicFactoryModule;
 import google.registry.flows.custom.CustomLogicModule;
 import google.registry.flows.domain.DomainPricingLogic;
-import google.registry.flows.domain.DomainPricingLogic.AllocationTokenInvalidForPremiumNameException;
 import google.registry.model.ImmutableObject;
 import google.registry.model.billing.BillingBase.Flag;
 import google.registry.model.billing.BillingCancellation;
@@ -52,11 +52,10 @@ import google.registry.model.tld.Tld;
 import google.registry.persistence.PersistenceModule.TransactionIsolationLevel;
 import google.registry.util.Clock;
 import google.registry.util.SystemClock;
+import jakarta.inject.Singleton;
 import java.io.Serializable;
-import java.math.BigInteger;
 import java.util.Optional;
 import java.util.Set;
-import javax.inject.Singleton;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.PipelineResult;
 import org.apache.beam.sdk.coders.KvCoder;
@@ -202,7 +201,7 @@ public class ExpandBillingRecurrencesPipeline implements Serializable {
                     "oneYearAgo",
                     endTime.minusYears(1)),
                 true,
-                (BigInteger id) -> {
+                (Long id) -> {
                   recurrencesInScopeCounter.inc();
                   // Note that because all elements are mapped to the same dummy key, the next
                   // batching transform will effectively be serial. This however does not matter for
@@ -374,7 +373,7 @@ public class ExpandBillingRecurrencesPipeline implements Serializable {
                   // during ARGP).
                   //
                   // See: DomainFlowUtils#createCancellingRecords
-                  domain.getDeletionTime().isBefore(billingTime)
+                  domain.getDeletionTime().isBefore(toInstant(billingTime))
                       ? ImmutableSet.of()
                       : ImmutableSet.of(
                           DomainTransactionRecord.create(
@@ -389,37 +388,30 @@ public class ExpandBillingRecurrencesPipeline implements Serializable {
       // It is OK to always create a OneTime, even though the domain might be deleted or transferred
       // later during autorenew grace period, as a cancellation will always be written out in those
       // instances.
-      BillingEvent billingEvent = null;
-      try {
-        billingEvent =
-            new BillingEvent.Builder()
-                .setBillingTime(billingTime)
-                .setRegistrarId(billingRecurrence.getRegistrarId())
-                // Determine the cost for a one-year renewal.
-                .setCost(
-                    domainPricingLogic
-                        .getRenewPrice(
-                            tld,
-                            billingRecurrence.getTargetId(),
-                            eventTime,
-                            1,
-                            billingRecurrence,
-                            Optional.empty())
-                        .getRenewCost())
-                .setEventTime(eventTime)
-                .setFlags(union(billingRecurrence.getFlags(), Flag.SYNTHETIC))
-                .setDomainHistory(historyEntry)
-                .setPeriodYears(1)
-                .setReason(billingRecurrence.getReason())
-                .setSyntheticCreationTime(endTime)
-                .setCancellationMatchingBillingEvent(billingRecurrence)
-                .setTargetId(billingRecurrence.getTargetId())
-                .build();
-      } catch (AllocationTokenInvalidForPremiumNameException e) {
-        // This should not be reached since we are not using an allocation token
-        return;
-      }
-      results.add(billingEvent);
+      results.add(
+          new BillingEvent.Builder()
+              .setBillingTime(billingTime)
+              .setRegistrarId(billingRecurrence.getRegistrarId())
+              // Determine the cost for a one-year renewal.
+              .setCost(
+                  domainPricingLogic
+                      .getRenewPrice(
+                          tld,
+                          billingRecurrence.getTargetId(),
+                          eventTime,
+                          1,
+                          billingRecurrence,
+                          Optional.empty())
+                      .getRenewCost())
+              .setEventTime(eventTime)
+              .setFlags(union(billingRecurrence.getFlags(), Flag.SYNTHETIC))
+              .setDomainHistory(historyEntry)
+              .setPeriodYears(1)
+              .setReason(billingRecurrence.getReason())
+              .setSyntheticCreationTime(endTime)
+              .setCancellationMatchingBillingEvent(billingRecurrence)
+              .setTargetId(billingRecurrence.getTargetId())
+              .build());
     }
     results.add(
         billingRecurrence

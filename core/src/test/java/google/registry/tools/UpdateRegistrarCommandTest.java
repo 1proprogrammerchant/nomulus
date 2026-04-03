@@ -15,7 +15,6 @@
 package google.registry.tools;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.common.truth.Truth8.assertThat;
 import static google.registry.testing.CertificateSamples.SAMPLE_CERT;
 import static google.registry.testing.CertificateSamples.SAMPLE_CERT3;
 import static google.registry.testing.CertificateSamples.SAMPLE_CERT3_HASH;
@@ -109,7 +108,7 @@ class UpdateRegistrarCommandTest extends CommandTestCase<UpdateRegistrarCommand>
 
   @Test
   void testSuccess_allowedTlds() throws Exception {
-    persistWhoisAbuseContact();
+    persistRdapAbuseContact();
     createTlds("xn--q9jyb4c", "foobar");
     persistResource(
         loadRegistrar("NewRegistrar")
@@ -126,8 +125,26 @@ class UpdateRegistrarCommandTest extends CommandTestCase<UpdateRegistrarCommand>
   }
 
   @Test
+  void testSuccess_allowedTlds_tldNameWithHyphens() throws Exception {
+    persistRdapAbuseContact();
+    createTlds("zz--main-1611", "foobar");
+    persistResource(
+        loadRegistrar("NewRegistrar")
+            .asBuilder()
+            .setAllowedTlds(ImmutableSet.of("foobar"))
+            .build());
+    runCommandInEnvironment(
+        RegistryToolEnvironment.PRODUCTION,
+        "--allowed_tlds=zz--main-1611,foobar",
+        "--force",
+        "NewRegistrar");
+    assertThat(loadRegistrar("NewRegistrar").getAllowedTlds())
+        .containsExactly("zz--main-1611", "foobar");
+  }
+
+  @Test
   void testSuccess_addAllowedTlds() throws Exception {
-    persistWhoisAbuseContact();
+    persistRdapAbuseContact();
     createTlds("xn--q9jyb4c", "foo", "bar");
     persistResource(
         loadRegistrar("NewRegistrar")
@@ -144,8 +161,21 @@ class UpdateRegistrarCommandTest extends CommandTestCase<UpdateRegistrarCommand>
   }
 
   @Test
+  void testSuccess_addAllowedTlds_tldNameWithHyphens() throws Exception {
+    persistRdapAbuseContact();
+    createTlds("foo", "bar", "zz--main-1611");
+    runCommandInEnvironment(
+        RegistryToolEnvironment.PRODUCTION,
+        "--add_allowed_tlds=foo,bar",
+        "--force",
+        "NewRegistrar");
+    assertThat(loadRegistrar("NewRegistrar").getAllowedTlds())
+        .containsExactly("foo", "bar", "zz--main-1611");
+  }
+
+  @Test
   void testSuccess_addAllowedTldsWithDupes() throws Exception {
-    persistWhoisAbuseContact();
+    persistRdapAbuseContact();
     createTlds("xn--q9jyb4c", "foo", "bar");
     persistResource(
         loadRegistrar("NewRegistrar")
@@ -415,7 +445,7 @@ class UpdateRegistrarCommandTest extends CommandTestCase<UpdateRegistrarCommand>
             .asBuilder()
             .setBillingAccountMap(ImmutableMap.of(USD, "abc123", JPY, "789xyz"))
             .build());
-    runCommand("--billing_account_map=\"\"", "--force", "NewRegistrar");
+    runCommand("--billing_account_map=", "--force", "NewRegistrar");
     assertThat(loadRegistrar("NewRegistrar").getBillingAccountMap()).isEmpty();
   }
 
@@ -450,7 +480,8 @@ class UpdateRegistrarCommandTest extends CommandTestCase<UpdateRegistrarCommand>
         newTld("foo", "FOO")
             .asBuilder()
             .setCurrency(JPY)
-            .setCreateBillingCost(Money.of(JPY, new BigDecimal(1300)))
+            .setCreateBillingCostTransitions(
+                ImmutableSortedMap.of(START_OF_TIME, Money.of(JPY, new BigDecimal(1300))))
             .setRestoreBillingCost(Money.of(JPY, new BigDecimal(1700)))
             .setServerStatusChangeBillingCost(Money.of(JPY, new BigDecimal(1900)))
             .setRegistryLockOrUnlockBillingCost(Money.of(JPY, new BigDecimal(2700)))
@@ -482,9 +513,9 @@ class UpdateRegistrarCommandTest extends CommandTestCase<UpdateRegistrarCommand>
   @Test
   void testSuccess_streetAddress() throws Exception {
     runCommand(
-        "--street=\"1234 Main St\"",
-        "--street \"4th Floor\"",
-        "--street \"Suite 1\"",
+        "--street=1234 Main St",
+        "--street 4th Floor",
+        "--street Suite 1",
         "--city Brooklyn",
         "--state NY",
         "--zip 11223",
@@ -637,10 +668,12 @@ class UpdateRegistrarCommandTest extends CommandTestCase<UpdateRegistrarCommand>
 
   @Test
   void testSuccess_setIcannEmail() throws Exception {
-    runCommand("--icann_referral_email=foo@bar.test", "--force", "TheRegistrar");
     Registrar registrar = loadRegistrar("TheRegistrar");
-    assertThat(registrar.getIcannReferralEmail()).isEqualTo("foo@bar.test");
-    assertThat(registrar.getEmailAddress()).isEqualTo("foo@bar.test");
+    assertThat(registrar.getEmailAddress()).isEqualTo("the.registrar@example.com");
+    runCommand("--icann_referral_email=foo@bar.test", "--force", "TheRegistrar");
+    Registrar updatedRegistrar = loadRegistrar("TheRegistrar");
+    assertThat(updatedRegistrar.getIcannReferralEmail()).isEqualTo("foo@bar.test");
+    assertThat(updatedRegistrar.getEmailAddress()).isEqualTo("the.registrar@example.com");
   }
 
   @Test
@@ -900,7 +933,7 @@ class UpdateRegistrarCommandTest extends CommandTestCase<UpdateRegistrarCommand>
   @Test
   void testFailure_tooFewStreetLines() {
     assertThrows(
-        IllegalArgumentException.class,
+        ParameterException.class,
         () ->
             runCommand(
                 "--street",
@@ -915,7 +948,7 @@ class UpdateRegistrarCommandTest extends CommandTestCase<UpdateRegistrarCommand>
   @Test
   void testFailure_unknownFlag() {
     assertThrows(
-        ParameterException.class,
+        IllegalArgumentException.class,
         () -> runCommand("--force", "--unrecognized_flag=foo", "NewRegistrar"));
   }
 
@@ -933,6 +966,14 @@ class UpdateRegistrarCommandTest extends CommandTestCase<UpdateRegistrarCommand>
     assertThrows(
         IllegalArgumentException.class,
         () -> runCommand("--name tHeRe GiStRaR", "--force", "NewRegistrar"));
+  }
+
+  @Test
+  void testSuccess_updateSameRegistrar_registrarNameSimilarToExisting() throws Exception {
+    // Note that "The -- registrar" normalizes identically to "The Registrar", which is created by
+    // JpaTransactionManagerExtension.
+    runCommand("--name The -- registrar", "--force", "TheRegistrar");
+    assertThat(loadRegistrar("TheRegistrar").getRegistrarName()).isEqualTo("The -- registrar");
   }
 
   @Test
@@ -966,11 +1007,11 @@ class UpdateRegistrarCommandTest extends CommandTestCase<UpdateRegistrarCommand>
         .isEqualTo("Provided email lolcat is not a valid email address");
   }
 
-  private void persistWhoisAbuseContact() {
+  private void persistRdapAbuseContact() {
     persistResource(
         JpaTransactionManagerExtension.makeRegistrarContact1()
             .asBuilder()
-            .setVisibleInDomainWhoisAsAbuse(true)
+            .setVisibleInDomainRdapAsAbuse(true)
             .build());
   }
 }

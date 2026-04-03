@@ -14,19 +14,25 @@
 
 package google.registry.model.domain;
 
+import static google.registry.util.DateTimeUtils.toInstant;
+
 import google.registry.model.ImmutableObject;
 import google.registry.model.UnsafeSerializable;
 import google.registry.model.billing.BillingEvent;
 import google.registry.model.billing.BillingRecurrence;
+import google.registry.model.billing.VKeyConverter_BillingEvent;
+import google.registry.model.billing.VKeyConverter_BillingRecurrence;
 import google.registry.model.domain.rgp.GracePeriodStatus;
 import google.registry.persistence.VKey;
-import javax.persistence.Access;
-import javax.persistence.AccessType;
-import javax.persistence.Column;
-import javax.persistence.EnumType;
-import javax.persistence.Enumerated;
-import javax.persistence.MappedSuperclass;
-import javax.persistence.Transient;
+import jakarta.persistence.Access;
+import jakarta.persistence.AccessType;
+import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.MappedSuperclass;
+import jakarta.persistence.Transient;
+import java.time.Instant;
 import org.joda.time.DateTime;
 
 /** Base class containing common fields and methods for {@link GracePeriod}. */
@@ -62,6 +68,7 @@ public class GracePeriodBase extends ImmutableObject implements UnsafeSerializab
   // NB: Would @IgnoreSave(IfNull.class), but not allowed for @Embed collections.
   @Access(AccessType.FIELD)
   @Column(name = "billing_event_id")
+  @Convert(converter = VKeyConverter_BillingEvent.class)
   VKey<BillingEvent> billingEvent = null;
 
   /**
@@ -71,6 +78,7 @@ public class GracePeriodBase extends ImmutableObject implements UnsafeSerializab
   // NB: Would @IgnoreSave(IfNull.class), but not allowed for @Embed collections.
   @Access(AccessType.FIELD)
   @Column(name = "billing_recurrence_id")
+  @Convert(converter = VKeyConverter_BillingRecurrence.class)
   VKey<BillingRecurrence> billingRecurrence = null;
 
   public long getGracePeriodId() {
@@ -85,8 +93,13 @@ public class GracePeriodBase extends ImmutableObject implements UnsafeSerializab
     return domainRepoId;
   }
 
-  public DateTime getExpirationTime() {
+  @Deprecated
+  public DateTime getExpirationDateTime() {
     return expirationTime;
+  }
+
+  public Instant getExpirationTime() {
+    return toInstant(expirationTime);
   }
 
   public String getRegistrarId() {

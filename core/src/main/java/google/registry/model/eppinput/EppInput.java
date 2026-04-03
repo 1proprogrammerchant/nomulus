@@ -40,6 +40,11 @@ import google.registry.model.domain.fee12.FeeCreateCommandExtensionV12;
 import google.registry.model.domain.fee12.FeeRenewCommandExtensionV12;
 import google.registry.model.domain.fee12.FeeTransferCommandExtensionV12;
 import google.registry.model.domain.fee12.FeeUpdateCommandExtensionV12;
+import google.registry.model.domain.feestdv1.FeeCheckCommandExtensionStdV1;
+import google.registry.model.domain.feestdv1.FeeCreateCommandExtensionStdV1;
+import google.registry.model.domain.feestdv1.FeeRenewCommandExtensionStdV1;
+import google.registry.model.domain.feestdv1.FeeTransferCommandExtensionStdV1;
+import google.registry.model.domain.feestdv1.FeeUpdateCommandExtensionStdV1;
 import google.registry.model.domain.launch.LaunchCheckExtension;
 import google.registry.model.domain.launch.LaunchCreateExtension;
 import google.registry.model.domain.launch.LaunchDeleteExtension;
@@ -56,22 +61,22 @@ import google.registry.model.domain.token.AllocationTokenExtension;
 import google.registry.model.eppinput.ResourceCommand.ResourceCheck;
 import google.registry.model.eppinput.ResourceCommand.SingleResourceCommand;
 import google.registry.model.host.HostCommand;
+import jakarta.xml.bind.annotation.XmlAttribute;
+import jakarta.xml.bind.annotation.XmlElement;
+import jakarta.xml.bind.annotation.XmlElementRef;
+import jakarta.xml.bind.annotation.XmlElementRefs;
+import jakarta.xml.bind.annotation.XmlElementWrapper;
+import jakarta.xml.bind.annotation.XmlElements;
+import jakarta.xml.bind.annotation.XmlEnumValue;
+import jakarta.xml.bind.annotation.XmlRootElement;
+import jakarta.xml.bind.annotation.XmlSchema;
+import jakarta.xml.bind.annotation.XmlType;
+import jakarta.xml.bind.annotation.adapters.XmlAdapter;
+import jakarta.xml.bind.annotation.adapters.XmlJavaTypeAdapter;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import javax.annotation.Nullable;
-import javax.xml.bind.annotation.XmlAttribute;
-import javax.xml.bind.annotation.XmlElement;
-import javax.xml.bind.annotation.XmlElementRef;
-import javax.xml.bind.annotation.XmlElementRefs;
-import javax.xml.bind.annotation.XmlElementWrapper;
-import javax.xml.bind.annotation.XmlElements;
-import javax.xml.bind.annotation.XmlEnumValue;
-import javax.xml.bind.annotation.XmlRootElement;
-import javax.xml.bind.annotation.XmlSchema;
-import javax.xml.bind.annotation.XmlType;
-import javax.xml.bind.annotation.adapters.XmlAdapter;
-import javax.xml.bind.annotation.adapters.XmlJavaTypeAdapter;
 
 /** This class represents the root EPP XML element for input. */
 @XmlRootElement(name = "epp")
@@ -159,7 +164,7 @@ public class EppInput extends ImmutableObject {
         .findFirst();
   }
 
-  /** A tag that goes inside of an EPP {@literal <command>}. */
+  /** A tag that goes inside an EPP {@literal <command>}. */
   public static class InnerCommand extends ImmutableObject {}
 
   /** A command that has an extension inside of it. */
@@ -347,6 +352,13 @@ public class EppInput extends ImmutableObject {
       @XmlElementRef(type = FeeRenewCommandExtensionV12.class),
       @XmlElementRef(type = FeeTransferCommandExtensionV12.class),
       @XmlElementRef(type = FeeUpdateCommandExtensionV12.class),
+
+      // Fee extension standard version 1.0 (RFC 8748)
+      @XmlElementRef(type = FeeCheckCommandExtensionStdV1.class),
+      @XmlElementRef(type = FeeCreateCommandExtensionStdV1.class),
+      @XmlElementRef(type = FeeRenewCommandExtensionStdV1.class),
+      @XmlElementRef(type = FeeTransferCommandExtensionStdV1.class),
+      @XmlElementRef(type = FeeUpdateCommandExtensionStdV1.class),
 
       // Launch phase extensions
       @XmlElementRef(type = LaunchCheckExtension.class),

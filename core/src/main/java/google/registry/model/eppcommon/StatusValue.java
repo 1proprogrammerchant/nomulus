@@ -22,13 +22,13 @@ import com.google.common.collect.ImmutableSet;
 import google.registry.model.EppResource;
 import google.registry.model.adapters.EnumToAttributeAdapter.EppEnum;
 import google.registry.model.adapters.StatusValueAdapter;
-import google.registry.model.contact.Contact;
-import google.registry.model.contact.ContactBase;
 import google.registry.model.domain.Domain;
 import google.registry.model.domain.DomainBase;
+import google.registry.model.domain.EmbeddedDomainBase;
+import google.registry.model.host.EmbeddedHostBase;
 import google.registry.model.host.Host;
 import google.registry.model.host.HostBase;
-import javax.xml.bind.annotation.adapters.XmlJavaTypeAdapter;
+import jakarta.xml.bind.annotation.adapters.XmlJavaTypeAdapter;
 
 /**
  * Represents an EPP status value for hosts, contacts, and domains, as defined in RFC 5731, 5732,
@@ -130,14 +130,14 @@ public enum StatusValue implements EppEnum {
   /** Enum to help clearly list which resource types a status value is allowed to be present on. */
   private enum AllowedOn {
     ALL(
-        Contact.class,
-        ContactBase.class,
         Domain.class,
         DomainBase.class,
+        EmbeddedDomainBase.class,
         Host.class,
-        HostBase.class),
+        HostBase.class,
+        EmbeddedHostBase.class),
     NONE,
-    DOMAINS(DomainBase.class, Domain.class);
+    DOMAINS(DomainBase.class, Domain.class, EmbeddedDomainBase.class);
 
     private final ImmutableSet<Class<? extends EppResource>> classes;
 

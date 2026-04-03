@@ -34,6 +34,8 @@ import google.registry.xjc.rdedomain.XjcRdeDomain;
 import google.registry.xjc.rdehost.XjcRdeHost;
 import google.registry.xjc.rderegistrar.XjcRdeRegistrar;
 import google.registry.xml.XmlException;
+import jakarta.inject.Inject;
+import jakarta.xml.bind.JAXBElement;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -45,8 +47,6 @@ import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeMap;
 import javax.annotation.Nullable;
-import javax.inject.Inject;
-import javax.xml.bind.JAXBElement;
 
 /** Command to view and schema validate an XML RDE escrow deposit. */
 @Parameters(separators = " =", commandDescription = "View/validate an XML escrow deposit.")

@@ -21,14 +21,8 @@ spec:
         ports:
         - containerPort: 30000
           name: health-check
-        - containerPort: 30001
-          name: whois
         - containerPort: 30002
           name: epp
-        - containerPort: 30010
-          name: http-whois
-        - containerPort: 30011
-          name: https-whois
         readinessProbe:
           tcpSocket:
             port: health-check
@@ -39,6 +33,13 @@ spec:
             port: health-check
           initialDelaySeconds: 15
           periodSeconds: 20
+        resources:
+          requests:
+            cpu: "300m"
+            memory: "350Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
         imagePullPolicy: Always
         args: ["--env", "sandbox", "--log"]
         env:

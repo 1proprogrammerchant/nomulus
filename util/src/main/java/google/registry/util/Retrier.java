@@ -21,18 +21,21 @@ import static google.registry.util.PredicateUtils.supertypeOf;
 
 import com.google.common.collect.ImmutableSet;
 import com.google.common.flogger.FluentLogger;
+import jakarta.inject.Inject;
+import jakarta.inject.Named;
 import java.io.Serializable;
+import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.function.Predicate;
-import javax.inject.Inject;
-import javax.inject.Named;
 import org.joda.time.Duration;
 
 /** Wrapper that does retry with exponential backoff. */
 public class Retrier implements Serializable {
 
   private static final long serialVersionUID = 1167386907195735483L;
+
+  private static final Random randomForSkew = new Random();
 
   private static final FluentLogger logger = FluentLogger.forEnclosingClass();
 
@@ -157,9 +160,11 @@ public class Retrier implements Serializable {
           throw new RuntimeException(e);
         }
         failureReporter.beforeRetry(e, failures, attempts);
+        // Wait (skewed) 100ms on the first attempt, doubling on each subsequent attempt.
+        long backoffMillis = pow(2, failures) * 100L;
+        long sleepDurationMillis = Math.round(randomForSkew.nextDouble(0.8, 1.2) * backoffMillis);
         try {
-          // Wait 100ms on the first attempt, doubling on each subsequent attempt.
-          sleeper.sleep(Duration.millis(pow(2, failures) * 100));
+          sleeper.sleep(Duration.millis(sleepDurationMillis));
         } catch (InterruptedException e2) {
           // Since we're not rethrowing InterruptedException, set the interrupt state on the thread
           // so the next blocking operation will know to abort the thread.

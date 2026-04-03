@@ -16,7 +16,6 @@ package google.registry.flows.domain;
 
 import static com.google.common.collect.MoreCollectors.onlyElement;
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.common.truth.Truth8.assertThat;
 import static google.registry.model.domain.token.AllocationToken.TokenType.BULK_PRICING;
 import static google.registry.model.domain.token.AllocationToken.TokenType.SINGLE_USE;
 import static google.registry.model.domain.token.AllocationToken.TokenType.UNLIMITED_USE;
@@ -53,12 +52,11 @@ import google.registry.flows.ResourceFlowUtils.BadAuthInfoForResourceException;
 import google.registry.flows.ResourceFlowUtils.ResourceDoesNotExistException;
 import google.registry.flows.ResourceFlowUtils.ResourceNotOwnedException;
 import google.registry.flows.domain.DomainFlowUtils.NotAuthorizedForTldException;
+import google.registry.flows.domain.token.AllocationTokenFlowUtils;
 import google.registry.flows.domain.token.AllocationTokenFlowUtils.AllocationTokenNotInPromotionException;
-import google.registry.flows.domain.token.AllocationTokenFlowUtils.AllocationTokenNotValidForDomainException;
 import google.registry.flows.domain.token.AllocationTokenFlowUtils.AllocationTokenNotValidForRegistrarException;
-import google.registry.flows.domain.token.AllocationTokenFlowUtils.AllocationTokenNotValidForTldException;
 import google.registry.flows.domain.token.AllocationTokenFlowUtils.AlreadyRedeemedAllocationTokenException;
-import google.registry.flows.domain.token.AllocationTokenFlowUtils.InvalidAllocationTokenException;
+import google.registry.flows.domain.token.AllocationTokenFlowUtils.NonexistentAllocationTokenException;
 import google.registry.flows.exceptions.NotPendingTransferException;
 import google.registry.model.billing.BillingBase;
 import google.registry.model.billing.BillingBase.Reason;
@@ -66,13 +64,13 @@ import google.registry.model.billing.BillingBase.RenewalPriceBehavior;
 import google.registry.model.billing.BillingCancellation;
 import google.registry.model.billing.BillingEvent;
 import google.registry.model.billing.BillingRecurrence;
-import google.registry.model.contact.ContactAuthInfo;
 import google.registry.model.domain.Domain;
 import google.registry.model.domain.DomainAuthInfo;
 import google.registry.model.domain.DomainHistory;
 import google.registry.model.domain.GracePeriod;
 import google.registry.model.domain.Period;
 import google.registry.model.domain.Period.Unit;
+import google.registry.model.domain.fee.FeeQueryCommandExtensionItem.CommandName;
 import google.registry.model.domain.rgp.GracePeriodStatus;
 import google.registry.model.domain.token.AllocationToken;
 import google.registry.model.domain.token.AllocationToken.TokenStatus;
@@ -150,14 +148,9 @@ class DomainTransferApproveFlowTest
                 .copyConstantFieldsToBuilder()
                 .setTransferStatus(TransferStatus.CLIENT_APPROVED)
                 .setPendingTransferExpirationTime(clock.nowUtc())
-                .setTransferredRegistrationExpirationTime(domain.getRegistrationExpirationTime())
+                .setTransferredRegistrationExpirationTime(
+                    domain.getRegistrationExpirationDateTime())
                 .build());
-  }
-
-  private void setEppLoader(String commandFilename) {
-    setEppInput(commandFilename);
-    // Replace the ROID in the xml file with the one generated in our test.
-    eppLoader.replaceAll("JD1234-REP", contact.getRepoId());
   }
 
   /**
@@ -185,7 +178,7 @@ class DomainTransferApproveFlowTest
       String expectedXmlFilename,
       DateTime expectedExpirationTime)
       throws Exception {
-    setEppLoader(commandFilename);
+    setEppInput(commandFilename);
     Tld registry = Tld.get(tld);
     domain = reloadResourceByForeignKey();
     // Make sure the implicit billing event is there; it will be deleted by the flow.
@@ -200,7 +193,7 @@ class DomainTransferApproveFlowTest
     assertThat(getPollMessages(domain, "TheRegistrar", clock.nowUtc().plusMonths(1))).hasSize(1);
     // Setup done; run the test.
     DomainTransferData originalTransferData = domain.getTransferData();
-    assertTransactionalFlow(true);
+    assertMutatingFlow(true);
     runFlowAssertResponse(loadFile(expectedXmlFilename));
     // Transfer should have succeeded. Verify correct fields were set.
     domain = reloadResourceByForeignKey();
@@ -224,7 +217,7 @@ class DomainTransferApproveFlowTest
     // should be one at the current time to the gaining registrar, as well as one at the domain's
     // autorenew time.
     assertThat(getPollMessages(domain, "NewRegistrar", clock.nowUtc().plusMonths(1))).hasSize(1);
-    assertThat(getPollMessages(domain, "NewRegistrar", domain.getRegistrationExpirationTime()))
+    assertThat(getPollMessages(domain, "NewRegistrar", domain.getRegistrationExpirationDateTime()))
         .hasSize(2);
 
     PollMessage gainingTransferPollMessage =
@@ -233,11 +226,11 @@ class DomainTransferApproveFlowTest
         getOnlyPollMessage(
             domain,
             "NewRegistrar",
-            domain.getRegistrationExpirationTime(),
+            domain.getRegistrationExpirationDateTime(),
             PollMessage.Autorenew.class);
     assertThat(gainingTransferPollMessage.getEventTime()).isEqualTo(clock.nowUtc());
     assertThat(gainingAutorenewPollMessage.getEventTime())
-        .isEqualTo(domain.getRegistrationExpirationTime());
+        .isEqualTo(domain.getRegistrationExpirationDateTime());
     DomainTransferResponse transferResponse =
         gainingTransferPollMessage
             .getResponseData()
@@ -247,7 +240,7 @@ class DomainTransferApproveFlowTest
             .collect(onlyElement());
     assertThat(transferResponse.getTransferStatus()).isEqualTo(TransferStatus.CLIENT_APPROVED);
     assertThat(transferResponse.getExtendedRegistrationExpirationTime())
-        .isEqualTo(domain.getRegistrationExpirationTime());
+        .isEqualTo(domain.getRegistrationExpirationDateTime());
     PendingActionNotificationResponse panData =
         gainingTransferPollMessage
             .getResponseData()
@@ -302,9 +295,9 @@ class DomainTransferApproveFlowTest
                         .build(),
                     getGainingClientAutorenewEvent()
                         .asBuilder()
-                        .setEventTime(domain.getRegistrationExpirationTime())
+                        .setEventTime(domain.getRegistrationExpirationDateTime())
                         .setRecurrenceLastExpansion(
-                            domain.getRegistrationExpirationTime().minusYears(1))
+                            domain.getRegistrationExpirationDateTime().minusYears(1))
                         .setDomainHistory(historyEntryTransferApproved)
                         .build()))
             .toArray(BillingBase[]::new));
@@ -340,9 +333,9 @@ class DomainTransferApproveFlowTest
                         .build(),
                     getGainingClientAutorenewEvent()
                         .asBuilder()
-                        .setEventTime(domain.getRegistrationExpirationTime())
+                        .setEventTime(domain.getRegistrationExpirationDateTime())
                         .setRecurrenceLastExpansion(
-                            domain.getRegistrationExpirationTime().minusYears(1))
+                            domain.getRegistrationExpirationDateTime().minusYears(1))
                         .setDomainHistory(historyEntryTransferApproved)
                         .build()))
             .toArray(BillingBase[]::new));
@@ -357,14 +350,14 @@ class DomainTransferApproveFlowTest
         tld,
         commandFilename,
         expectedXmlFilename,
-        domain.getRegistrationExpirationTime().plusYears(1),
+        domain.getRegistrationExpirationDateTime().plusYears(1),
         1);
   }
 
   private void doFailingTest(String commandFilename) throws Exception {
-    setEppLoader(commandFilename);
+    setEppInput(commandFilename);
     // Setup done; run the test.
-    assertTransactionalFlow(true);
+    assertMutatingFlow(true);
     runFlow();
   }
 
@@ -377,7 +370,7 @@ class DomainTransferApproveFlowTest
 
   @Test
   void testDryRun() throws Exception {
-    setEppLoader("domain_transfer_approve.xml");
+    setEppInput("domain_transfer_approve.xml");
     dryRunFlowAssertResponse(loadFile("domain_transfer_approve_response.xml"));
   }
 
@@ -388,8 +381,11 @@ class DomainTransferApproveFlowTest
             new AllocationToken.Builder()
                 .setToken("abc123")
                 .setTokenType(BULK_PRICING)
+                .setDiscountFraction(1.0)
                 .setRenewalPriceBehavior(RenewalPriceBehavior.SPECIFIED)
+                .setRenewalPrice(Money.of(USD, 0))
                 .setAllowedRegistrarIds(ImmutableSet.of("TheRegistrar"))
+                .setAllowedEppActions(ImmutableSet.of(CommandName.CREATE))
                 .build());
     domain = reloadResourceByForeignKey();
     persistResource(
@@ -416,7 +412,10 @@ class DomainTransferApproveFlowTest
             new AllocationToken.Builder()
                 .setToken("abc123")
                 .setTokenType(BULK_PRICING)
+                .setDiscountFraction(1.0)
                 .setRenewalPriceBehavior(RenewalPriceBehavior.SPECIFIED)
+                .setRenewalPrice(Money.of(USD, 0))
+                .setAllowedEppActions(ImmutableSet.of(CommandName.CREATE))
                 .setAllowedRegistrarIds(ImmutableSet.of("TheRegistrar"))
                 .build());
     domain = reloadResourceByForeignKey();
@@ -484,14 +483,6 @@ class DomainTransferApproveFlowTest
     doSuccessfulTest(
         "tld",
         "domain_transfer_approve_domain_authinfo.xml",
-        "domain_transfer_approve_response.xml");
-  }
-
-  @Test
-  void testSuccess_contactAuthInfo() throws Exception {
-    doSuccessfulTest(
-        "tld",
-        "domain_transfer_approve_contact_authinfo.xml",
         "domain_transfer_approve_response.xml");
   }
 
@@ -614,14 +605,8 @@ class DomainTransferApproveFlowTest
   }
 
   @Test
-  void testFailure_badContactPassword() {
-    // Change the contact's password so it does not match the password in the file.
-    contact =
-        persistResource(
-            contact
-                .asBuilder()
-                .setAuthInfo(ContactAuthInfo.create(PasswordAuth.create("badpassword")))
-                .build());
+  void testFailure_contactPassword() {
+    // Contact passwords cannot be provided because we don't store contacts
     EppException thrown =
         assertThrows(
             BadAuthInfoForResourceException.class,
@@ -837,7 +822,7 @@ class DomainTransferApproveFlowTest
         "tld",
         "domain_transfer_approve.xml",
         "domain_transfer_approve_response_zero_period.xml",
-        domain.getRegistrationExpirationTime());
+        domain.getRegistrationExpirationDateTime());
     assertHistoryEntriesDoNotContainTransferBillingEventsOrGracePeriods();
   }
 
@@ -870,7 +855,7 @@ class DomainTransferApproveFlowTest
         "tld",
         "domain_transfer_approve.xml",
         "domain_transfer_approve_response_zero_period_autorenew_grace.xml",
-        domain.getRegistrationExpirationTime());
+        domain.getRegistrationExpirationDateTime());
     assertHistoryEntriesDoNotContainTransferBillingEventsOrGracePeriods();
   }
 
@@ -891,7 +876,7 @@ class DomainTransferApproveFlowTest
   @Test
   void testFailure_invalidAllocationToken() throws Exception {
     setEppInput("domain_transfer_approve_allocation_token.xml");
-    EppException thrown = assertThrows(InvalidAllocationTokenException.class, this::runFlow);
+    EppException thrown = assertThrows(NonexistentAllocationTokenException.class, this::runFlow);
     assertAboutEppExceptions().that(thrown).marshalsToXml();
   }
 
@@ -904,9 +889,12 @@ class DomainTransferApproveFlowTest
             .setDomainName("otherdomain.tld")
             .build());
     setEppInput("domain_transfer_approve_allocation_token.xml");
-    EppException thrown =
-        assertThrows(AllocationTokenNotValidForDomainException.class, this::runFlow);
-    assertAboutEppExceptions().that(thrown).marshalsToXml();
+    assertAboutEppExceptions()
+        .that(
+            assertThrows(
+                AllocationTokenFlowUtils.AllocationTokenNotValidForDomainException.class,
+                this::runFlow))
+        .marshalsToXml();
   }
 
   @Test
@@ -965,8 +953,7 @@ class DomainTransferApproveFlowTest
                     .build())
             .build());
     setEppInput("domain_transfer_approve_allocation_token.xml");
-    EppException thrown = assertThrows(AllocationTokenNotValidForTldException.class, this::runFlow);
-    assertAboutEppExceptions().that(thrown).marshalsToXml();
+    runFlowAssertResponse(loadFile("domain_transfer_approve_response.xml"));
   }
 
   @Test

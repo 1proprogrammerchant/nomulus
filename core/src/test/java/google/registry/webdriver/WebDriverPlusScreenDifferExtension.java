@@ -21,11 +21,11 @@ import static org.apache.commons.text.StringEscapeUtils.escapeEcmaScript;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Predicates;
 import java.net.URL;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 import org.junit.jupiter.api.extension.AfterEachCallback;
 import org.junit.jupiter.api.extension.BeforeEachCallback;
@@ -52,7 +52,6 @@ public final class WebDriverPlusScreenDifferExtension
     implements BeforeEachCallback,
         AfterEachCallback,
         WebDriver,
-        org.openqa.selenium.interactions.HasInputDevices,
         TakesScreenshot,
         JavascriptExecutor,
         HasCapabilities {
@@ -72,7 +71,7 @@ public final class WebDriverPlusScreenDifferExtension
 
   // Default size of the browser window when taking screenshot. Having a fixed size of window can
   // help make visual regression test deterministic.
-  private static final Dimension DEFAULT_WINDOW_SIZE = new Dimension(1200, 2000);
+  private static final Dimension DEFAULT_WINDOW_SIZE = new Dimension(1920, 1200);
 
   private static final String GOLDENS_PATH =
       getResource(WebDriverPlusScreenDifferExtension.class, "goldens/chrome-linux").getFile();
@@ -101,7 +100,7 @@ public final class WebDriverPlusScreenDifferExtension
     webDriverPlusScreenDiffer =
         new WebDriverScreenDiffer(driver, GOLDENS_PATH, MAX_COLOR_DIFF, MAX_PIXEL_DIFF);
     // non-zero timeout so findByElement will wait for the element to appear
-    driver.manage().timeouts().implicitlyWait(5, TimeUnit.SECONDS);
+    driver.manage().timeouts().implicitlyWait(Duration.ofSeconds(5));
     driver.manage().window().setSize(DEFAULT_WINDOW_SIZE);
 
     if (imageNamePrefix == null) {
@@ -131,6 +130,16 @@ public final class WebDriverPlusScreenDifferExtension
   /** Waits indefinitely for an element matching {@code by}, then returns it. */
   WebElement waitForElement(By by) throws InterruptedException {
     return waitForElementWithCondition(by, Predicates.alwaysTrue());
+  }
+
+  /** Waits for the removal of an element (e.g. a loading bar). */
+  void waitForElementToNotExist(By by) throws InterruptedException {
+    while (true) {
+      if (findElements(by).isEmpty()) {
+        return;
+      }
+      Thread.sleep(WAIT_FOR_ELEMENTS_POLLING_INTERVAL_MS);
+    }
   }
 
   /**
@@ -281,16 +290,6 @@ public final class WebDriverPlusScreenDifferExtension
   @Override
   public Options manage() {
     return driver.manage();
-  }
-
-  @Override
-  public org.openqa.selenium.interactions.Keyboard getKeyboard() {
-    return ((org.openqa.selenium.interactions.HasInputDevices) driver).getKeyboard();
-  }
-
-  @Override
-  public org.openqa.selenium.interactions.Mouse getMouse() {
-    return ((org.openqa.selenium.interactions.HasInputDevices) driver).getMouse();
   }
 
   @Override

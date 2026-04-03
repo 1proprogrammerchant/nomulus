@@ -24,6 +24,12 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.io.Closer;
 import com.google.common.io.Resources;
+import jakarta.xml.bind.JAXBContext;
+import jakarta.xml.bind.JAXBException;
+import jakarta.xml.bind.Marshaller;
+import jakarta.xml.bind.UnmarshalException;
+import jakarta.xml.bind.Unmarshaller;
+import jakarta.xml.bind.helpers.DefaultValidationEventHandler;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -32,16 +38,9 @@ import java.io.StringWriter;
 import java.io.Writer;
 import java.nio.charset.Charset;
 import java.util.Collection;
-import java.util.List;
 import java.util.Map;
 import javax.annotation.Nullable;
 import javax.xml.XMLConstants;
-import javax.xml.bind.JAXBContext;
-import javax.xml.bind.JAXBException;
-import javax.xml.bind.Marshaller;
-import javax.xml.bind.UnmarshalException;
-import javax.xml.bind.Unmarshaller;
-import javax.xml.bind.helpers.DefaultValidationEventHandler;
 import javax.xml.stream.FactoryConfigurationError;
 import javax.xml.stream.XMLInputFactory;
 import javax.xml.stream.XMLStreamException;
@@ -82,7 +81,7 @@ public class XmlTransformer {
    * @param schemaFilenames schema files, used only for validating, and relative to this package.
    * @param recognizedClasses the classes that can be used to marshal to and from
    */
-  public XmlTransformer(List<String> schemaFilenames, Class<?>... recognizedClasses) {
+  public XmlTransformer(ImmutableList<String> schemaFilenames, Class<?>... recognizedClasses) {
     try {
       this.jaxbContext = JAXBContext.newInstance(recognizedClasses);
       this.schema = loadXmlSchemas(schemaFilenames);
@@ -148,9 +147,8 @@ public class XmlTransformer {
           XML_INPUT_FACTORY.createXMLStreamReader(new StreamSource(autoClosingStream, SYSTEM_ID))));
     } catch (UnmarshalException e) {
       // Plain old parsing exceptions have a SAXParseException with no further cause.
-      if (e.getLinkedException() instanceof SAXParseException
+      if (e.getLinkedException() instanceof SAXParseException sae
           && e.getLinkedException().getCause() == null) {
-        SAXParseException sae = (SAXParseException) e.getLinkedException();
         throw new XmlException(String.format(
             "Syntax error at line %d, column %d: %s",
             sae.getLineNumber(),
@@ -158,8 +156,7 @@ public class XmlTransformer {
             nullToEmpty(sae.getMessage()).replaceAll("&quot;", "")));
       }
       // These get thrown for attempted XXE attacks.
-      if (e.getLinkedException() instanceof XMLStreamException) {
-        XMLStreamException xse = (XMLStreamException) e.getLinkedException();
+      if (e.getLinkedException() instanceof XMLStreamException xse) {
         throw new XmlException(String.format(
             "Syntax error at line %d, column %d: %s",
             xse.getLocation().getLineNumber(),
@@ -177,9 +174,9 @@ public class XmlTransformer {
   /**
    * Streams {@code root} without XML declaration, optionally validating against the schema.
    *
-   * <p>The root object must be annotated with {@link javax.xml.bind.annotation.XmlRootElement}. If
-   * the validation parameter is set to {@link ValidationMode#STRICT} this method will verify that
-   * your object strictly conforms to {@link #schema}. Because the output is streamed, {@link
+   * <p>The root object must be annotated with {@link jakarta.xml.bind.annotation.XmlRootElement}.
+   * If the validation parameter is set to {@link ValidationMode#STRICT} this method will verify
+   * that your object strictly conforms to {@link #schema}. Because the output is streamed, {@link
    * XmlException} will most likely be thrown <i>after</i> output has been written.
    *
    * @param root the object to write
@@ -202,10 +199,10 @@ public class XmlTransformer {
   /**
    * Validates and streams {@code root} as formatted XML bytes with XML declaration.
    *
-   * <p>The root object must be annotated with {@link javax.xml.bind.annotation.XmlRootElement}. If
-   * the validation parameter is set to {@link ValidationMode#STRICT} this method will verify that
-   * your object strictly conforms to {@link #schema}. Because the output is streamed,
-   * {@link XmlException} will most likely be thrown <i>after</i> output has been written.
+   * <p>The root object must be annotated with {@link jakarta.xml.bind.annotation.XmlRootElement}.
+   * If the validation parameter is set to {@link ValidationMode#STRICT} this method will verify
+   * that your object strictly conforms to {@link #schema}. Because the output is streamed, {@link
+   * XmlException} will most likely be thrown <i>after</i> output has been written.
    *
    * @param root the object to write
    * @param out byte-oriented output for writing XML. This method won't close it.
@@ -229,7 +226,7 @@ public class XmlTransformer {
   /**
    * Validates and streams {@code root} as characters, always using strict validation.
    *
-   * <p>The root object must be annotated with {@link javax.xml.bind.annotation.XmlRootElement}.
+   * <p>The root object must be annotated with {@link jakarta.xml.bind.annotation.XmlRootElement}.
    * This method will verify that your object strictly conforms to {@link #schema}. Because the
    * output is streamed, {@link XmlException} will most likely be thrown <i>after</i> output has
    * been written.
@@ -253,7 +250,7 @@ public class XmlTransformer {
   }
 
   /** Creates a single {@link Schema} from multiple {@code .xsd} files. */
-  public static Schema loadXmlSchemas(List<String> schemaFilenames) {
+  public static Schema loadXmlSchemas(ImmutableList<String> schemaFilenames) {
     try (Closer closer = Closer.create()) {
       StreamSource[] sources = new StreamSource[schemaFilenames.size()];
       for (int i = 0; i < schemaFilenames.size(); ++i) {

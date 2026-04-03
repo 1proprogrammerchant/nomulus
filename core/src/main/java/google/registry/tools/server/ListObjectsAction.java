@@ -34,6 +34,7 @@ import com.google.common.flogger.FluentLogger;
 import google.registry.model.ImmutableObject;
 import google.registry.request.JsonResponse;
 import google.registry.request.Parameter;
+import jakarta.inject.Inject;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -43,7 +44,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Stream;
-import javax.inject.Inject;
 
 /**
  * Abstract base class for actions that list ImmutableObjects.
@@ -139,7 +139,7 @@ public abstract class ListObjectsAction<T extends ImmutableObject> implements Ru
   private ImmutableSet<String> getFieldsToUse(ImmutableSet<T> objects) {
     // Get the list of fields from the received parameter.
     List<String> fieldsToUse;
-    if ((fields == null) || !fields.isPresent()) {
+    if ((fields == null) || fields.isEmpty()) {
       fieldsToUse = new ArrayList<>();
     } else {
       fieldsToUse = Splitter.on(',').splitToList(fields.get());
@@ -239,8 +239,7 @@ public abstract class ListObjectsAction<T extends ImmutableObject> implements Ru
       lines.add(rowFormatter.apply(headerRow));
 
       // Add a row of separator lines (column names mapping to '-' * column width).
-      Map<String, String> separatorRow =
-          Maps.transformValues(columnWidths, width -> Strings.repeat("-", width));
+      Map<String, String> separatorRow = Maps.transformValues(columnWidths, "-"::repeat);
       lines.add(rowFormatter.apply(separatorRow));
     }
 

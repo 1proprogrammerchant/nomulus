@@ -45,7 +45,6 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.Collection;
-import java.util.Date;
 import java.util.Map;
 import java.util.ServiceLoader;
 import org.apache.commons.codec.binary.Base64;
@@ -56,8 +55,9 @@ import org.apache.commons.codec.binary.Base64;
  *
  * <p>This class accepts the application-default-credential as {@code ServiceAccountSigner},
  * avoiding the need for exported private keys. In this case, the default credential user itself
- * (project-id@appspot.gserviceaccount.com on AppEngine) must have domain-wide delegation to the
- * Workspace APIs. The default credential user also must have the Token Creator role to itself.
+ * (nomulus-service-account@{project-id}.iam.gserviceaccount.com on GCP) must have domain-wide
+ * delegation to the Workspace APIs. The default credential user also must have the Token Creator
+ * role to itself.
  *
  * <p>If the user provides a credential {@code S} that carries its own private key, such as {@link
  * com.google.auth.oauth2.ServiceAccountCredentials}, this class can use {@code S} to impersonate
@@ -112,7 +112,6 @@ public class DelegatedCredentials extends GoogleCredentials {
    * @param clock Used for setting token expiration times.
    * @param tokenRefreshDelay The lifetime of each token. Should not exceed one hour according to
    *     GCP recommendations.
-   * @return
    */
   static DelegatedCredentials createSelfSignedDelegatedCredential(
       ServiceAccountSigner signer,
@@ -196,8 +195,7 @@ public class DelegatedCredentials extends GoogleCredentials {
     GenericData responseData = response.parseAs(GenericData.class);
     String accessToken = validateString(responseData, "access_token", PARSE_ERROR_PREFIX);
     int expiresInSeconds = validateInt32(responseData, "expires_in", PARSE_ERROR_PREFIX);
-    long expiresAtMilliseconds = clock.nowUtc().getMillis() + expiresInSeconds * 1000L;
-    return new AccessToken(accessToken, new Date(expiresAtMilliseconds));
+    return new AccessToken(accessToken, clock.nowUtc().plusSeconds(expiresInSeconds).toDate());
   }
 
   String createAssertion(JsonFactory jsonFactory, long currentTime) throws IOException {
@@ -232,7 +230,7 @@ public class DelegatedCredentials extends GoogleCredentials {
     return HTTP_TRANSPORT;
   }
 
-  protected static <T> T getFromServiceLoader(Class<? extends T> clazz, T defaultInstance) {
+  public static <T> T getFromServiceLoader(Class<? extends T> clazz, T defaultInstance) {
     return Iterables.getFirst(ServiceLoader.load(clazz), defaultInstance);
   }
 
@@ -256,8 +254,7 @@ public class DelegatedCredentials extends GoogleCredentials {
     if (value == null) {
       throw new IOException(String.format(VALUE_NOT_FOUND_MESSAGE, errorPrefix, key));
     }
-    if (value instanceof BigDecimal) {
-      BigDecimal bigDecimalValue = (BigDecimal) value;
+    if (value instanceof BigDecimal bigDecimalValue) {
       return bigDecimalValue.intValueExact();
     }
     if (!(value instanceof Integer)) {

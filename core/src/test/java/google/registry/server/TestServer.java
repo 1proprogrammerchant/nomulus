@@ -24,23 +24,29 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.net.HostAndPort;
 import com.google.common.util.concurrent.SimpleTimeLimiter;
-import google.registry.ui.server.registrar.RegistrarSettingsAction;
+import google.registry.util.RegistryEnvironment;
 import google.registry.util.UrlChecker;
+import jakarta.servlet.MultipartConfigElement;
+import jakarta.servlet.annotation.MultipartConfig;
+import jakarta.servlet.http.HttpServlet;
+import java.io.IOException;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.LinkedBlockingDeque;
 import java.util.concurrent.TimeUnit;
-import javax.servlet.http.HttpServlet;
-import org.mortbay.jetty.Connector;
-import org.mortbay.jetty.Server;
-import org.mortbay.jetty.bio.SocketConnector;
-import org.mortbay.jetty.servlet.Context;
-import org.mortbay.jetty.servlet.DefaultServlet;
-import org.mortbay.jetty.servlet.ServletHolder;
+import org.eclipse.jetty.ee10.servlet.DefaultServlet;
+import org.eclipse.jetty.ee10.servlet.ServletContextHandler;
+import org.eclipse.jetty.ee10.servlet.ServletHolder;
+import org.eclipse.jetty.ee10.webapp.WebAppContext;
+import org.eclipse.jetty.server.Server;
+import org.eclipse.jetty.server.ServerConnector;
 
 /**
  * HTTP server that serves static content and handles servlet requests in the calling thread.
@@ -49,12 +55,14 @@ import org.mortbay.jetty.servlet.ServletHolder;
  * {@link #stop()} methods. However, a {@link #process()} method was added, which is used to process
  * requests made to servlets (not static files) in the calling thread.
  *
+ * <p>A servlet that expects multi-part requests should be annotated with {@link MultipartConfig}.
+ *
  * <p><b>Note:</b> This server is intended for development purposes. For the love all that is good,
- * do not make this public facing.
+ * do not make this public-facing.
  *
  * <h3>Implementation Details</h3>
  *
- * <p>Jetty6 is multithreaded and provides no mechanism for controlling which threads execute your
+ * <p>Jetty is multithreaded and provides no mechanism for controlling which threads execute your
  * requests. HttpServer solves this problem by wrapping all the servlets provided to the constructor
  * inside {@link ServletWrapperDelegatorServlet}. When requests come in, a {@link FutureTask} will
  * be sent back to this class using a {@link LinkedBlockingDeque} message queue. Those messages are
@@ -70,6 +78,7 @@ public final class TestServer {
   private final HostAndPort urlAddress;
   private final Server server = new Server();
   private final BlockingQueue<FutureTask<Void>> requestQueue = new LinkedBlockingDeque<>();
+  private List<Path> multiPartTmpDirs = new ArrayList<>();
 
   /**
    * Creates a new instance, but does not begin serving.
@@ -81,14 +90,17 @@ public final class TestServer {
   public TestServer(
       HostAndPort address, ImmutableMap<String, Path> runfiles, ImmutableList<Route> routes) {
     urlAddress = createUrlAddress(address);
-    server.addConnector(createConnector(address));
-    server.addHandler(createHandler(runfiles, routes));
+    ServerConnector connector = new ServerConnector(server);
+    connector.setHost(urlAddress.getHost());
+    connector.setPort(urlAddress.getPortOrDefault(DEFAULT_PORT));
+    server.addConnector(connector);
+    server.setHandler(createHandler(runfiles, routes));
   }
 
   /** Starts the HTTP server in a new thread and returns once it's online. */
   public void start() {
     try {
-      RegistrarSettingsAction.setIsInTestDriverToTrue();
+      RegistryEnvironment.setIsInTestDriver(true);
       server.start();
     } catch (Exception e) {
       throwIfUnchecked(e);
@@ -126,11 +138,18 @@ public final class TestServer {
               .callWithTimeout(
                   () -> {
                     server.stop();
-                    RegistrarSettingsAction.setIsInTestDriverToFalse();
+                    RegistryEnvironment.setIsInTestDriver(false);
                     return null;
                   },
                   SHUTDOWN_TIMEOUT_MS,
                   TimeUnit.MILLISECONDS);
+      for (var dir : multiPartTmpDirs) {
+        try {
+          Files.delete(dir);
+        } catch (Exception e) {
+          // Ignore
+        }
+      }
     } catch (Exception e) {
       throwIfUnchecked(e);
       throw new RuntimeException(e);
@@ -147,32 +166,46 @@ public final class TestServer {
     }
   }
 
-  private Context createHandler(Map<String, Path> runfiles, ImmutableList<Route> routes) {
-    Context context = new Context(server, CONTEXT_PATH, Context.SESSIONS);
-    context.addServlet(new ServletHolder(HealthzServlet.class), "/healthz");
+  private ServletContextHandler createHandler(
+      Map<String, Path> runfiles, ImmutableList<Route> routes) {
+    ServletContextHandler context = new ServletContextHandler(CONTEXT_PATH, WebAppContext.SESSIONS);
+    context.setContextPath(CONTEXT_PATH);
+    context.addServlet(HealthzServlet.class, "/healthz");
+    ServletHolder holder;
     for (Map.Entry<String, Path> runfile : runfiles.entrySet()) {
-      context.addServlet(
-          StaticResourceServlet.create(runfile.getKey(), runfile.getValue()),
-          runfile.getKey());
+      holder = context.addServlet(StaticResourceServlet.class, runfile.getKey());
+      StaticResourceServlet.configureServletHolder(holder, runfile.getKey(), runfile.getValue());
     }
     for (Route route : routes) {
-      context.addServlet(new ServletHolder(wrapServlet(route.servletClass())), route.path());
+      holder = context.addServlet(wrapServlet(route.servletClass()), route.path());
+      MultipartConfig multipartConfig = route.servletClass().getAnnotation(MultipartConfig.class);
+      if (multipartConfig != null) {
+        try {
+          var location = multipartConfig.location();
+          if (location == null || location.isBlank()) {
+            Path tmpDir = Files.createTempDirectory("TestServer_");
+            multiPartTmpDirs.add(tmpDir);
+            location = tmpDir.toString();
+          }
+          MultipartConfigElement multipartConfigElement =
+              new MultipartConfigElement(
+                  location,
+                  multipartConfig.maxFileSize(),
+                  multipartConfig.maxRequestSize(),
+                  multipartConfig.fileSizeThreshold());
+          holder.getRegistration().setMultipartConfig(multipartConfigElement);
+        } catch (IOException e) {
+          throw new RuntimeException(e);
+        }
+      }
     }
-    ServletHolder holder = new ServletHolder(DefaultServlet.class);
+    holder = context.addServlet(DefaultServlet.class, "/*");
     holder.setInitParameter("aliases", "1");
-    context.addServlet(holder, "/*");
     return context;
   }
 
   private HttpServlet wrapServlet(Class<? extends HttpServlet> servletClass) {
     return new ServletWrapperDelegatorServlet(servletClass, requestQueue);
-  }
-
-  private static Connector createConnector(HostAndPort address) {
-    SocketConnector connector = new SocketConnector();
-    connector.setHost(address.getHost());
-    connector.setPort(address.getPortOrDefault(DEFAULT_PORT));
-    return connector;
   }
 
   /** Converts a bind address into an address that other machines can use to connect here. */

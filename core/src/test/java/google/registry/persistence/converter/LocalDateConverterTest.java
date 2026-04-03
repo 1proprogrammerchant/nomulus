@@ -16,14 +16,14 @@ package google.registry.persistence.converter;
 
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
-import static google.registry.testing.DatabaseHelper.insertInDb;
+import static google.registry.testing.DatabaseHelper.persistResource;
 
 import google.registry.model.ImmutableObject;
 import google.registry.persistence.VKey;
 import google.registry.persistence.transaction.JpaTestExtensions;
 import google.registry.persistence.transaction.JpaTestExtensions.JpaUnitTestExtension;
-import javax.persistence.Entity;
-import javax.persistence.Id;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Id;
 import org.joda.time.LocalDate;
 import org.joda.time.format.ISODateTimeFormat;
 import org.junit.jupiter.api.Test;
@@ -54,7 +54,7 @@ public class LocalDateConverterTest {
 
   private LocalDateConverterTestEntity persistAndLoadTestEntity(LocalDate date) {
     LocalDateConverterTestEntity entity = new LocalDateConverterTestEntity(date);
-    insertInDb(entity);
+    persistResource(entity);
     return tm().transact(
             () -> tm().loadByKey(VKey.create(LocalDateConverterTestEntity.class, "id")));
   }

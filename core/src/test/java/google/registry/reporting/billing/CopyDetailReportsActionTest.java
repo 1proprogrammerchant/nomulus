@@ -17,8 +17,8 @@ package google.registry.reporting.billing;
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.testing.DatabaseHelper.loadRegistrar;
 import static google.registry.testing.DatabaseHelper.persistResource;
+import static jakarta.servlet.http.HttpServletResponse.SC_OK;
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static javax.servlet.http.HttpServletResponse.SC_OK;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -177,18 +177,57 @@ class CopyDetailReportsActionTest {
             "hello,world\n1,2".getBytes(UTF_8));
     verify(emailUtils)
         .sendAlertEmail(
-            "Copied detail reports.\n"
-                + "The following errors were encountered:\n"
-                + "Registrar: TheRegistrar\n"
-                + "Error: java.io.IOException: expected\n");
+            """
+            Copied detail reports.
+            The following errors were encountered:
+            Registrar: TheRegistrar
+            Error: java.io.IOException: expected
+            """);
     assertThat(response.getStatus()).isEqualTo(SC_OK);
     assertThat(response.getContentType()).isEqualTo(MediaType.PLAIN_TEXT_UTF_8);
     assertThat(response.getPayload())
         .isEqualTo(
-            "Copied detail reports.\n"
-                + "The following errors were encountered:\n"
-                + "Registrar: TheRegistrar\n"
-                + "Error: java.io.IOException: expected\n");
+            """
+            Copied detail reports.
+            The following errors were encountered:
+            Registrar: TheRegistrar
+            Error: java.io.IOException: expected
+            """);
+  }
+
+  @Test
+  void testFail_tooManyFailures_one_registrar_sendsAlertEmail_continues() throws IOException {
+    gcsUtils.createFromBytes(
+        BlobId.of("test-bucket", "results/invoice_details_2017-10_TheRegistrar_hello.csv"),
+        "hola,mundo\n3,4".getBytes(UTF_8));
+
+    gcsUtils.createFromBytes(
+        BlobId.of("test-bucket", "results/invoice_details_2017-10_TheRegistrar_test.csv"),
+        "hello,world\n1,2".getBytes(UTF_8));
+    when(driveConnection.createOrUpdateFile(any(), any(), any(), any()))
+        .thenThrow(new IOException("expected"));
+
+    action.run();
+    verify(emailUtils)
+        .sendAlertEmail(
+            """
+            Copied detail reports.
+            The following errors were encountered:
+            Registrar: TheRegistrar
+            Error: java.io.IOException: expected
+            \tjava.io.IOException: expected
+            """);
+    assertThat(response.getStatus()).isEqualTo(SC_OK);
+    assertThat(response.getContentType()).isEqualTo(MediaType.PLAIN_TEXT_UTF_8);
+    assertThat(response.getPayload())
+        .isEqualTo(
+            """
+            Copied detail reports.
+            The following errors were encountered:
+            Registrar: TheRegistrar
+            Error: java.io.IOException: expected
+            \tjava.io.IOException: expected
+            """);
   }
 
   @Test

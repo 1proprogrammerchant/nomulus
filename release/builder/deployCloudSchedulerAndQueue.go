@@ -32,6 +32,8 @@ import (
 
 var projectName string
 
+var baseDomain string
+
 var clientId string
 
 const GcpLocation = "us-central1"
@@ -65,6 +67,8 @@ type Queue struct {
 type Task struct {
 	URL         string `xml:"url"`
 	Description string `xml:"description"`
+	Service     string `xml:"service"`
+	Timeout     string `xml:"timeout"`
 	Schedule    string `xml:"schedule"`
 	Name        string `xml:"name"`
 }
@@ -79,6 +83,9 @@ type TasksSyncManager struct {
 }
 
 type YamlEntries struct {
+	GcpProject struct {
+		BaseDomain string `yaml:"baseDomain"`
+	} `yaml:"gcpProject"`
 	Auth struct {
 		OauthClientId string `yaml:"oauthClientId"`
 	} `yaml:"auth"`
@@ -168,7 +175,7 @@ func (manager TasksSyncManager) getXmlEntries() []Task {
 }
 
 func (manager TasksSyncManager) getArgs(task Task, operationType string) []string {
-	// Cloud Schedule doesn't allow description of more than 499 chars and \n
+	// Cloud Scheduler doesn't allow description of more than 499 chars.
 	var description string
 	if len(task.Description) > 499 {
 		log.Default().Println("Task description exceeds the allowed length of " +
@@ -180,18 +187,28 @@ func (manager TasksSyncManager) getArgs(task Task, operationType string) []strin
 	}
 	description = strings.ReplaceAll(description, "\n", " ")
 
-	return []string{
+	var service = "backend"
+	var uri string
+	uri = fmt.Sprintf("https://%s.%s%s", service, baseDomain, strings.TrimSpace(task.URL))
+
+	args := []string{
 		"--project", projectName,
 		"scheduler", "jobs", operationType,
 		"http", task.Name,
 		"--location", GcpLocation,
 		"--schedule", task.Schedule,
-		"--uri", fmt.Sprintf("https://backend-dot-%s.appspot.com%s", projectName, strings.TrimSpace(task.URL)),
+		"--uri", uri,
 		"--description", description,
 		"--http-method", "get",
 		"--oidc-service-account-email", getCloudSchedulerServiceAccountEmail(),
 		"--oidc-token-audience", clientId,
 	}
+
+	if task.Timeout != "" {
+		args = append(args, "--attempt-deadline", task.Timeout)
+	}
+
+	return args
 }
 
 func (manager TasksSyncManager) fetchExistingRecords() ExistingEntries {
@@ -313,7 +330,7 @@ func getExistingEntries(cmd *exec.Cmd) ExistingEntries {
 func main() {
 	if len(os.Args) < 4 || os.Args[1] == "" || os.Args[2] == "" || os.Args[3] == "" {
 		panic("Error - Invalid Parameters.\n" +
-			"Required params: 1 - Nomulu config YAML path; 2 - config XML path; 3 - project name;")
+			"Required params: 1 - Nomulus config YAML path; 2 - config XML path; 3 - project name;\n")
 	}
 	// Nomulus YAML config file path, used to extract OAuth client ID.
 	nomulusConfigFileLocation := os.Args[1]
@@ -333,6 +350,8 @@ func main() {
 	if err := yaml.Unmarshal(byteValue, &yamlEntries); err != nil {
 		panic("Failed to parse YAML file entries: " + err.Error())
 	}
+
+	baseDomain = yamlEntries.GcpProject.BaseDomain
 	clientId = yamlEntries.Auth.OauthClientId
 
 	log.Default().Println("XML Filepath " + configFileLocation)

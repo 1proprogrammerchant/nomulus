@@ -1,4 +1,4 @@
-// Copyright 2017 The Nomulus Authors. All Rights Reserved.
+// Copyright 2024 The Nomulus Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,10 +22,12 @@ import static com.google.common.base.Strings.nullToEmpty;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.ImmutableSortedSet.toImmutableSortedSet;
 import static com.google.common.collect.Sets.immutableEnumSet;
+import static com.google.common.collect.Streams.stream;
 import static com.google.common.io.BaseEncoding.base64;
 import static google.registry.config.RegistryConfig.getDefaultRegistrarWhoisServer;
 import static google.registry.model.CacheUtils.memoizeWithShortExpiration;
 import static google.registry.model.tld.Tlds.assertTldsExist;
+import static google.registry.persistence.transaction.TransactionManagerFactory.replicaTm;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
 import static google.registry.util.CollectionUtils.nullToEmptyImmutableCopy;
 import static google.registry.util.CollectionUtils.nullToEmptyImmutableSortedCopy;
@@ -52,6 +54,7 @@ import com.google.gson.annotations.Expose;
 import com.google.re2j.Pattern;
 import google.registry.model.Buildable;
 import google.registry.model.CreateAutoTimestamp;
+import google.registry.model.GetterDelegate;
 import google.registry.model.JsonMapBuilder;
 import google.registry.model.Jsonifiable;
 import google.registry.model.UpdateAutoTimestamp;
@@ -59,7 +62,24 @@ import google.registry.model.UpdateAutoTimestampEntity;
 import google.registry.model.tld.Tld;
 import google.registry.model.tld.Tld.TldType;
 import google.registry.persistence.VKey;
+import google.registry.persistence.converter.CidrBlockListUserType;
+import google.registry.persistence.converter.CurrencyToStringMapUserType;
+import google.registry.persistence.transaction.TransactionManager;
 import google.registry.util.CidrAddressBlock;
+import google.registry.util.PasswordUtils;
+import google.registry.util.PasswordUtils.HashAlgorithm;
+import jakarta.mail.internet.AddressException;
+import jakarta.mail.internet.InternetAddress;
+import jakarta.persistence.AttributeOverride;
+import jakarta.persistence.AttributeOverrides;
+import jakarta.persistence.Column;
+import jakarta.persistence.Embedded;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.Id;
+import jakarta.persistence.Index;
+import jakarta.persistence.Table;
 import java.security.cert.CertificateParsingException;
 import java.util.Comparator;
 import java.util.List;
@@ -70,18 +90,6 @@ import java.util.Set;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import javax.annotation.Nullable;
-import javax.mail.internet.AddressException;
-import javax.mail.internet.InternetAddress;
-import javax.persistence.AttributeOverride;
-import javax.persistence.AttributeOverrides;
-import javax.persistence.Column;
-import javax.persistence.Embedded;
-import javax.persistence.Entity;
-import javax.persistence.EnumType;
-import javax.persistence.Enumerated;
-import javax.persistence.Id;
-import javax.persistence.Index;
-import javax.persistence.Table;
 import org.joda.money.CurrencyUnit;
 import org.joda.time.DateTime;
 
@@ -97,7 +105,7 @@ import org.joda.time.DateTime;
     column = @Column(nullable = false, name = "lastUpdateTime"))
 public class Registrar extends UpdateAutoTimestampEntity implements Buildable, Jsonifiable {
 
-  /** Represents the type of a registrar entity. */
+  /** Represents the type of registrar entity. */
   public enum Type {
     /** A real-world, third-party registrar. Should have non-null IANA and billing account IDs. */
     REAL(Objects::nonNull),
@@ -185,7 +193,7 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
       immutableEnumSet(State.ACTIVE, State.SUSPENDED);
 
   /**
-   * The types for which a {@link Registrar} should be included in WHOIS and RDAP output. We exclude
+   * The types for which a {@link Registrar} should be included in RDAP output. We exclude
    * registrars of type TEST. We considered excluding INTERNAL as well, but decided that
    * troubleshooting would be easier with INTERNAL registrars visible. Before removing other types
    * from view, carefully consider the effect on things like prober monitoring and OT&E.
@@ -200,17 +208,18 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
 
   /** A caching {@link Supplier} of a registrarId to {@link Registrar} map. */
   private static final Supplier<ImmutableMap<String, Registrar>> CACHE_BY_REGISTRAR_ID =
-      memoizeWithShortExpiration(() -> Maps.uniqueIndex(loadAll(), Registrar::getRegistrarId));
+      memoizeWithShortExpiration(
+          () ->
+              Maps.uniqueIndex(
+                  tm().reTransact(() -> tm().loadAllOf(Registrar.class)),
+                  Registrar::getRegistrarId));
 
   /**
    * Unique registrar client id. Must conform to "clIDType" as defined in RFC5730.
    *
    * @see <a href="http://tools.ietf.org/html/rfc5730#section-4.2">Shared Structure Schema</a>
    */
-  @Id
-  @Column(nullable = false)
-  @Expose
-  String registrarId;
+  @Id @Expose String registrarId;
 
   /**
    * Registrar name. This is a distinct from the client identifier since there are no restrictions
@@ -228,6 +237,7 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
   String registrarName;
 
   /** The type of this registrar. */
+  @Expose
   @Column(nullable = false)
   @Enumerated(EnumType.STRING)
   Type type;
@@ -237,18 +247,22 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
   State state;
 
   /** The set of TLDs which this registrar is allowed to access. */
-  @Expose Set<String> allowedTlds;
+  @GetterDelegate(methodName = "getAllowedTlds")
+  @Expose
+  Set<String> allowedTlds;
 
   /** Host name of WHOIS server. */
   @Expose String whoisServer;
 
   /** Base URLs for the registrar's RDAP servers. */
+  @GetterDelegate(methodName = "getRdapBaseUrls")
   Set<String> rdapBaseUrls;
 
   /**
    * Whether registration of premium names should be blocked over EPP. If this is set to true, then
    * the only way to register premium names is with the superuser flag.
    */
+  @Column(nullable = false)
   boolean blockPremiumNames;
 
   // Authentication.
@@ -270,7 +284,10 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
   String failoverClientCertificateHash;
 
   /** An allow list of netmasks (in CIDR notation) which the client is allowed to connect from. */
-  @Expose List<CidrAddressBlock> ipAddressAllowList;
+  @org.hibernate.annotations.Type(CidrBlockListUserType.class)
+  @Column(columnDefinition = "text[]")
+  @Expose
+  List<CidrAddressBlock> ipAddressAllowList;
 
   /** A hashed password for EPP access. The hash is a base64 encoded SHA256 string. */
   String passwordHash;
@@ -359,7 +376,11 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
    * accessed by {@link #getBillingAccountMap}, a sorted map is returned to guarantee deterministic
    * behavior when serializing the map, for display purpose for instance.
    */
-  @Expose @Nullable Map<CurrencyUnit, String> billingAccountMap;
+  @Expose
+  @Nullable
+  @org.hibernate.annotations.Type(CurrencyToStringMapUserType.class)
+  @Column(columnDefinition = "hstore")
+  Map<CurrencyUnit, String> billingAccountMap;
 
   /** URL of registrar's website. */
   @Expose String url;
@@ -372,7 +393,7 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
    */
   @Expose String icannReferralEmail;
 
-  /** Id of the folder in drive used to publish information for this registrar. */
+  /** ID of the folder in drive used to publish information for this registrar. */
   @Expose String driveFolderId;
 
   // Metadata.
@@ -391,17 +412,23 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
    */
   DateTime lastExpiringFailoverCertNotificationSentDate = START_OF_TIME;
 
+  /** The time that the POCs have been reviewed last. */
+  @Expose DateTime lastPocVerificationDate = START_OF_TIME;
+
   /** Telephone support passcode (5-digit numeric) */
   String phonePasscode;
 
   /**
-   * A dirty bit for whether RegistrarContact changes have been made that haven't been synced to
-   * Google Groups yet. When creating a new instance, contacts require syncing by default.
+   * A dirty bit for whether RegistrarPoc changes have been made that haven't been synced to Google
+   * Groups yet. When creating a new instance, contacts require syncing by default.
    */
+  @Column(nullable = false)
   boolean contactsRequireSyncing = true;
 
-  /** Whether or not registry lock is allowed for this registrar. */
-  @Expose boolean registryLockAllowed = false;
+  /** Whether registry lock is allowed for this registrar. */
+  @Column(nullable = false)
+  @Expose
+  boolean registryLockAllowed = false;
 
   public String getRegistrarId() {
     return registrarId;
@@ -446,6 +473,10 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
     return registrarName;
   }
 
+  public DateTime getLastPocVerificationDate() {
+    return lastPocVerificationDate;
+  }
+
   public Type getType() {
     return type;
   }
@@ -468,7 +499,7 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
     return LIVE_STATES.contains(state);
   }
 
-  /** Returns {@code true} if registrar should be visible in WHOIS results. */
+  /** Returns {@code true} if registrar should be visible in RDAP results. */
   public boolean isLiveAndPubliclyVisible() {
     return LIVE_STATES.contains(state) && PUBLICLY_VISIBLE_TYPES.contains(type);
   }
@@ -554,7 +585,20 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
    * address.
    */
   public ImmutableSortedSet<RegistrarPoc> getContacts() {
-    return getContactPocs().stream()
+    return getPocs(tm()).stream()
+        .filter(Objects::nonNull)
+        .collect(toImmutableSortedSet(CONTACT_EMAIL_COMPARATOR));
+  }
+
+  /**
+   * Returns a list of all {@link RegistrarPoc} objects for this registrar sorted by their email
+   * address.
+   *
+   * <p>This method queries the replica database. It is reserved for use cases that can tolerate
+   * slightly stale data.
+   */
+  public ImmutableSortedSet<RegistrarPoc> getPocsFromReplica() {
+    return getPocs(replicaTm()).stream()
         .filter(Objects::nonNull)
         .collect(toImmutableSortedSet(CONTACT_EMAIL_COMPARATOR));
   }
@@ -563,28 +607,23 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
    * Returns a list of {@link RegistrarPoc} objects of a given type for this registrar sorted by
    * their email address.
    */
-  public ImmutableSortedSet<RegistrarPoc> getContactsOfType(final RegistrarPoc.Type type) {
-    return getContactPocs().stream()
+  public ImmutableSortedSet<RegistrarPoc> getPocsOfType(final RegistrarPoc.Type type) {
+    return getPocs(tm()).stream()
         .filter(Objects::nonNull)
         .filter((@Nullable RegistrarPoc contact) -> contact.getTypes().contains(type))
         .collect(toImmutableSortedSet(CONTACT_EMAIL_COMPARATOR));
   }
 
   /**
-   * Returns the {@link RegistrarPoc} that is the WHOIS abuse contact for this registrar, or empty
-   * if one does not exist.
+   * Returns the {@link RegistrarPoc} that is the RDAP abuse contact for this registrar, or empty if
+   * one does not exist.
    */
-  public Optional<RegistrarPoc> getWhoisAbuseContact() {
-    return getContacts().stream().filter(RegistrarPoc::getVisibleInDomainWhoisAsAbuse).findFirst();
+  public Optional<RegistrarPoc> getRdapAbuseContact() {
+    return getContacts().stream().filter(RegistrarPoc::getVisibleInDomainRdapAsAbuse).findFirst();
   }
 
-  private ImmutableSet<RegistrarPoc> getContactPocs() {
-    return tm().transact(
-            () ->
-                tm().query("FROM RegistrarPoc WHERE registrarId = :registrarId", RegistrarPoc.class)
-                    .setParameter("registrarId", registrarId)
-                    .getResultStream()
-                    .collect(toImmutableSet()));
+  private ImmutableList<RegistrarPoc> getPocs(TransactionManager txnManager) {
+    return txnManager.transact(() -> RegistrarPoc.loadForRegistrar(registrarId));
   }
 
   @Override
@@ -599,6 +638,7 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
         .putString(
             "lastExpiringFailoverCertNotificationSentDate",
             lastExpiringFailoverCertNotificationSentDate)
+        .putString("lastPocVerificationDate", lastPocVerificationDate)
         .put("registrarName", registrarName)
         .put("type", type)
         .put("state", state)
@@ -635,11 +675,29 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
   }
 
   public boolean verifyPassword(String password) {
-    return hashPassword(password, salt).equals(passwordHash);
+    return getCurrentHashAlgorithm(password).isPresent();
+  }
+
+  public Optional<HashAlgorithm> getCurrentHashAlgorithm(String password) {
+    return PasswordUtils.verifyPassword(password, passwordHash, salt);
   }
 
   public String getPhonePasscode() {
     return phonePasscode;
+  }
+
+  /**
+   * Sets the registrar ID.
+   *
+   * <p>This should only be used for restoring the registrar ID of an object being loaded in a
+   * PostLoad method (effectively, when it is still under construction by Hibernate). In all other
+   * cases, the object should be regarded as immutable and changes should go through a Builder.
+   *
+   * <p>In addition to this special case use, this method must exist to satisfy Hibernate.
+   */
+  @SuppressWarnings("unused")
+  public void setRegistrarId(String registrarId) {
+    this.registrarId = registrarId;
   }
 
   @Override
@@ -647,7 +705,6 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
     return new Builder(clone(this));
   }
 
-  /** Creates a {@link VKey} for this instance. */
   @Override
   public VKey<Registrar> createVKey() {
     return createVKey(registrarId);
@@ -663,7 +720,7 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
   public static class Builder extends Buildable.Builder<Registrar> {
     public Builder() {}
 
-    private Builder(Registrar instance) {
+    public Builder(Registrar instance) {
       super(instance);
     }
 
@@ -773,6 +830,12 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
       return this;
     }
 
+    public Builder setLastPocVerificationDate(DateTime now) {
+      checkArgumentNotNull(now, "Registrar lastPocVerificationDate cannot be null");
+      getInstance().lastPocVerificationDate = now;
+      return this;
+    }
+
     private static String calculateHash(String clientCertificate) {
       if (clientCertificate == null) {
         return null;
@@ -782,6 +845,24 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
       } catch (CertificateParsingException e) {
         throw new IllegalArgumentException(e);
       }
+    }
+
+    // Making sure there's no registrar with the same ianaId already in the system
+    private static boolean isNotADuplicateIanaId(
+        Iterable<? extends Registrar> registrars, Registrar newInstance) {
+      // Return early if newly build registrar is not type REAL or ianaId is
+      // reserved by ICANN - https://www.iana.org/assignments/registrar-ids/registrar-ids.xhtml
+      if (!Type.REAL.equals(newInstance.type)
+          || ImmutableSet.of(1L, 8L).contains(newInstance.ianaIdentifier)) {
+        return true;
+      }
+
+      return stream(registrars)
+          .filter(registrar -> Type.REAL.equals(registrar.getType()))
+          .filter(registrar -> !Objects.equals(newInstance.registrarId, registrar.getRegistrarId()))
+          .noneMatch(
+              registrar ->
+                  Objects.equals(newInstance.ianaIdentifier, registrar.getIanaIdentifier()));
     }
 
     public Builder setContactsRequireSyncing(boolean contactsRequireSyncing) {
@@ -857,12 +938,17 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
       checkArgument(
           Range.closed(6, 16).contains(nullToEmpty(password).length()),
           "Password must be 6-16 characters long.");
-      getInstance().salt = base64().encode(SALT_SUPPLIER.get());
-      getInstance().passwordHash = hashPassword(password, getInstance().salt);
+      byte[] salt = SALT_SUPPLIER.get();
+      getInstance().salt = base64().encode(salt);
+      getInstance().passwordHash = hashPassword(password, salt);
       return this;
     }
 
-    /** @throws IllegalArgumentException if provided passcode is not 5-digit numeric */
+    /**
+     * Set the phone passcode.
+     *
+     * @throws IllegalArgumentException if provided passcode is not 5-digit numeric
+     */
     public Builder setPhonePasscode(String phonePasscode) {
       checkArgument(
           phonePasscode == null || PHONE_PASSCODE_PATTERN.matcher(phonePasscode).matches(),
@@ -900,6 +986,15 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
           String.format(
               "Supplied IANA ID is not valid for %s registrar type: %s",
               getInstance().type, getInstance().ianaIdentifier));
+
+      // We do not allow creating Real registrars with IANA ID that's already in the system
+      // b/315007360 - for more details
+      checkArgument(
+          isNotADuplicateIanaId(loadAllCached(), getInstance()),
+          String.format(
+              "Rejected attempt to create a registrar with ianaId that's already in the system -"
+                  + " %s",
+              getInstance().ianaIdentifier));
 
       // In order to grant access to real TLDs, the registrar must have a corresponding billing
       // account ID for that TLD's billing currency.
@@ -951,7 +1046,7 @@ public class Registrar extends UpdateAutoTimestampEntity implements Buildable, J
   /** Loads and returns a registrar entity by its id directly from the database. */
   public static Optional<Registrar> loadByRegistrarId(String registrarId) {
     checkArgument(!Strings.isNullOrEmpty(registrarId), "registrarId must be specified");
-    return tm().transact(() -> tm().loadByKeyIfPresent(createVKey(registrarId)));
+    return tm().reTransact(() -> tm().loadByKeyIfPresent(createVKey(registrarId)));
   }
 
   /**

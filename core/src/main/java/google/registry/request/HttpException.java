@@ -17,9 +17,10 @@ package google.registry.request;
 import static com.google.common.html.HtmlEscapers.htmlEscaper;
 
 import com.google.common.flogger.FluentLogger;
+import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.logging.Level;
-import javax.servlet.http.HttpServletResponse;
+import javax.annotation.Nullable;
 
 /** Base for exceptions that cause an HTTP error response. */
 public abstract class HttpException extends RuntimeException {
@@ -33,13 +34,14 @@ public abstract class HttpException extends RuntimeException {
 
   private final int responseCode;
 
-  protected HttpException(int responseCode, String message, Throwable cause, Level logLevel) {
+  protected HttpException(
+      int responseCode, String message, @Nullable Throwable cause, Level logLevel) {
     super(message, cause);
     this.responseCode = responseCode;
     this.logLevel = logLevel;
   }
 
-  protected HttpException(int responseCode, String message, Throwable cause) {
+  protected HttpException(int responseCode, String message, @Nullable Throwable cause) {
     this(responseCode, message, cause, Level.INFO);
   }
 
@@ -71,8 +73,8 @@ public abstract class HttpException extends RuntimeException {
   /**
    * Exception that causes a 204 response.
    *
-   * <p>This is useful for App Engine task queue handlers that want to display an error, but don't
-   * want the task to automatically retry, since the status code is less than 300.
+   * <p>This is useful for task queue handlers that want to display an error, but don't want the
+   * task to automatically retry, since the status code is less than 300.
    */
   public static final class NoContentException extends HttpException {
     public NoContentException(String message) {
@@ -117,22 +119,6 @@ public abstract class HttpException extends RuntimeException {
     }
   }
 
-  /** Exception that causes a 403 response. */
-  public static final class ForbiddenException extends HttpException {
-    public ForbiddenException(String message) {
-      super(HttpServletResponse.SC_FORBIDDEN, message, null);
-    }
-
-    public ForbiddenException(String message, Exception cause) {
-      super(HttpServletResponse.SC_FORBIDDEN, message, cause);
-    }
-
-    @Override
-    public String getResponseCodeString() {
-      return "Forbidden";
-    }
-  }
-
   /** Exception that causes a 404 response. */
   public static final class NotFoundException extends HttpException {
     public NotFoundException() {
@@ -146,18 +132,6 @@ public abstract class HttpException extends RuntimeException {
     @Override
     public String getResponseCodeString() {
       return "Not Found";
-    }
-  }
-
-  /** Exception that causes a 405 response. */
-  public static final class MethodNotAllowedException extends HttpException {
-    public MethodNotAllowedException() {
-      super(HttpServletResponse.SC_METHOD_NOT_ALLOWED, "Method not allowed", null);
-    }
-
-    @Override
-    public String getResponseCodeString() {
-      return "Method Not Allowed";
     }
   }
 

@@ -169,27 +169,32 @@ class EnqueuePollMessageCommandTest extends CommandTestCase<EnqueuePollMessageCo
 
   @Test
   void testNonexistentDomain() throws Exception {
-    IllegalArgumentException thrown =
+    RuntimeException thrown =
         assertThrows(
-            IllegalArgumentException.class,
+            RuntimeException.class,
             () -> runCommandForced("--domain=example2.tld", "--message=This domain needs help"));
     assertThat(thrown)
+        .hasCauseThat()
         .hasMessageThat()
-        .isEqualTo("Domain example2.tld doesn't exist or isn't active");
+        .isEqualTo("The domain with given ID (example2.tld) doesn't exist.");
   }
 
   @Test
   void testDomainIsRequired() {
     ParameterException thrown =
         assertThrows(ParameterException.class, () -> runCommandForced("--message=Foo bar"));
-    assertThat(thrown).hasMessageThat().contains("The following option is required: -d, --domain");
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("The following option is required: [-d | --domain]");
   }
 
   @Test
   void testMessageIsRequired() {
     ParameterException thrown =
         assertThrows(ParameterException.class, () -> runCommandForced("--domain=example.tld"));
-    assertThat(thrown).hasMessageThat().contains("The following option is required: -m, --message");
+    assertThat(thrown)
+        .hasMessageThat()
+        .contains("The following option is required: [-m | --message]");
   }
 
   @Test

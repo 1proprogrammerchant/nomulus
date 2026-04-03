@@ -15,13 +15,13 @@
 package google.registry.flows;
 
 import static com.google.common.base.Preconditions.checkState;
-import static google.registry.model.IdService.allocateId;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
 import static google.registry.xml.ValidationMode.LENIENT;
 import static google.registry.xml.ValidationMode.STRICT;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.google.common.base.Throwables;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.flogger.FluentLogger;
 import google.registry.flows.EppException.CommandUseErrorException;
 import google.registry.flows.EppException.ParameterValueRangeErrorException;
@@ -31,6 +31,7 @@ import google.registry.flows.custom.EntityChanges;
 import google.registry.model.EppResource;
 import google.registry.model.adapters.CurrencyUnitAdapter.UnknownCurrencyException;
 import google.registry.model.eppcommon.EppXmlTransformer;
+import google.registry.model.eppcommon.StatusValue;
 import google.registry.model.eppinput.EppInput.WrongProtocolVersionException;
 import google.registry.model.eppoutput.EppOutput;
 import google.registry.model.host.InetAddressAdapter.IpVersionMismatchException;
@@ -40,6 +41,9 @@ import java.util.List;
 
 /** Static utility functions for flows. */
 public final class FlowUtils {
+
+  public static final ImmutableSet<StatusValue> DELETE_PROHIBITED_STATUSES =
+      ImmutableSet.of(StatusValue.CLIENT_DELETE_PROHIBITED, StatusValue.SERVER_DELETE_PROHIBITED);
 
   private static final FluentLogger logger = FluentLogger.forEnclosingClass();
 
@@ -52,9 +56,10 @@ public final class FlowUtils {
     }
   }
 
-  /** Persists the saves and deletes in an {@link EntityChanges} to the DB. */
+  /** Persists the inserts, updates, and deletes in an {@link EntityChanges} to the DB. */
   public static void persistEntityChanges(EntityChanges entityChanges) {
-    tm().putAll(entityChanges.getSaves());
+    tm().insertAll(entityChanges.getInserts());
+    tm().updateAll(entityChanges.getUpdates());
     tm().delete(entityChanges.getDeletes());
   }
 
@@ -103,7 +108,7 @@ public final class FlowUtils {
   }
 
   public static HistoryEntryId createHistoryEntryId(EppResource parent) {
-    return new HistoryEntryId(parent.getRepoId(), allocateId());
+    return new HistoryEntryId(parent.getRepoId(), tm().allocateId());
   }
 
   /** Registrar is not logged in. */

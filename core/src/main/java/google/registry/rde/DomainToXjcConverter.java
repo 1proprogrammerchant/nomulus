@@ -14,26 +14,16 @@
 
 package google.registry.rde;
 
-import static com.google.common.base.Preconditions.checkState;
-import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
 
-import com.google.common.base.Ascii;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.flogger.FluentLogger;
-import google.registry.model.contact.Contact;
-import google.registry.model.domain.DesignatedContact;
 import google.registry.model.domain.Domain;
 import google.registry.model.domain.rgp.GracePeriodStatus;
 import google.registry.model.domain.secdns.DomainDsData;
 import google.registry.model.eppcommon.StatusValue;
 import google.registry.model.rde.RdeMode;
 import google.registry.model.transfer.DomainTransferData;
-import google.registry.model.transfer.TransferData;
-import google.registry.persistence.VKey;
 import google.registry.util.Idn;
-import google.registry.xjc.domain.XjcDomainContactAttrType;
-import google.registry.xjc.domain.XjcDomainContactType;
 import google.registry.xjc.domain.XjcDomainNsType;
 import google.registry.xjc.domain.XjcDomainStatusType;
 import google.registry.xjc.domain.XjcDomainStatusValueType;
@@ -48,8 +38,6 @@ import google.registry.xjc.secdns.XjcSecdnsDsOrKeyType;
 
 /** Utility class that turns {@link Domain} as {@link XjcRdeDomainElement}. */
 final class DomainToXjcConverter {
-
-  private static final FluentLogger logger = FluentLogger.forEnclosingClass();
 
   /** Converts {@link Domain} to {@link XjcRdeDomainElement}. */
   static XjcRdeDomainElement convert(Domain domain, RdeMode mode) {
@@ -106,13 +94,13 @@ final class DomainToXjcConverter {
     //    identifying the end (expiration) of the domain name object's
     //    registration period.  This element MUST be present if the domain
     //    name has been allocated.
-    bean.setExDate(model.getRegistrationExpirationTime());
+    bean.setExDate(model.getRegistrationExpirationDateTime());
 
     // o  An OPTIONAL <upDate> element that contains the date and time of
     //    the most recent domain-name-object modification.  This element
     //    MUST NOT be present if the domain name object has never been
     //    modified.
-    bean.setUpDate(model.getLastEppUpdateTime());
+    bean.setUpDate(model.getLastEppUpdateDateTime());
 
     // o  An OPTIONAL <upRr> element that contains the identifier of the
     //    registrar that last updated the domain name object.  This element
@@ -154,8 +142,6 @@ final class DomainToXjcConverter {
 
     switch (mode) {
       case FULL:
-        String domainName = model.getDomainName();
-
         // o  Zero or more OPTIONAL <rgpStatus> element to represent
         //    "pendingDelete" sub-statuses, including "redemptionPeriod",
         //    "pendingRestore", and "pendingDelete", that a domain name can be
@@ -163,29 +149,6 @@ final class DomainToXjcConverter {
         //    [RFC3915].
         for (GracePeriodStatus status : model.getGracePeriodStatuses()) {
           bean.getRgpStatuses().add(convertGracePeriodStatus(status));
-        }
-
-        // o  An OPTIONAL <registrant> element that contain the identifier for
-        //    the human or organizational social information object associated
-        //    as the holder of the domain name object.
-        VKey<Contact> registrant = model.getRegistrant();
-        if (registrant == null) {
-          logger.atWarning().log("Domain %s has no registrant contact.", domainName);
-        } else {
-          Contact registrantContact = tm().transact(() -> tm().loadByKey(registrant));
-          checkState(
-              registrantContact != null,
-              "Registrant contact %s on domain %s does not exist",
-              registrant,
-              domainName);
-          bean.setRegistrant(registrantContact.getContactId());
-        }
-
-        // o  Zero or more OPTIONAL <contact> elements that contain identifiers
-        //    for the human or organizational social information objects
-        //    associated with the domain name object.
-        for (DesignatedContact contact : model.getContacts()) {
-          bean.getContacts().add(convertDesignatedContact(contact, domainName));
         }
 
         // o  An OPTIONAL <secDNS> element that contains the public key
@@ -257,7 +220,7 @@ final class DomainToXjcConverter {
         && !Strings.isNullOrEmpty(model.getTransferData().getLosingRegistrarId());
   }
 
-  /** Converts {@link TransferData} to {@link XjcRdeDomainTransferDataType}. */
+  /** Converts {@link DomainTransferData} to {@link XjcRdeDomainTransferDataType}. */
   private static XjcRdeDomainTransferDataType convertTransferData(DomainTransferData model) {
     XjcRdeDomainTransferDataType bean = new XjcRdeDomainTransferDataType();
     bean.setTrStatus(
@@ -265,8 +228,8 @@ final class DomainToXjcConverter {
     bean.setReRr(RdeUtils.makeXjcRdeRrType(model.getGainingRegistrarId()));
     bean.setAcRr(RdeUtils.makeXjcRdeRrType(model.getLosingRegistrarId()));
     bean.setReDate(model.getTransferRequestTime());
-    bean.setAcDate(model.getPendingTransferExpirationTime());
-    bean.setExDate(model.getTransferredRegistrationExpirationTime());
+    bean.setAcDate(model.getPendingTransferExpirationDateTime());
+    bean.setExDate(model.getTransferredRegistrationExpirationDateTime());
     return bean;
   }
 
@@ -292,26 +255,6 @@ final class DomainToXjcConverter {
     bean.setDigestType((short) model.getDigestType());
     bean.setDigest(model.getDigest());
     bean.setKeyData(null);
-    return bean;
-  }
-
-  /** Converts {@link DesignatedContact} to {@link XjcDomainContactType}. */
-  private static XjcDomainContactType convertDesignatedContact(
-      DesignatedContact model, String domainName) {
-    XjcDomainContactType bean = new XjcDomainContactType();
-    checkState(
-        model.getContactKey() != null,
-        "Contact key for type %s is null on domain %s",
-        model.getType(),
-        domainName);
-    Contact contact = tm().transact(() -> tm().loadByKey(model.getContactKey()));
-    checkState(
-        contact != null,
-        "Contact %s on domain %s does not exist",
-        model.getContactKey(),
-        domainName);
-    bean.setType(XjcDomainContactAttrType.fromValue(Ascii.toLowerCase(model.getType().toString())));
-    bean.setValue(contact.getContactId());
     return bean;
   }
 

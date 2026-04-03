@@ -17,7 +17,6 @@ package google.registry.tools;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Strings.isNullOrEmpty;
 import static google.registry.pricing.PricingEngineProxy.getPricesForDomainName;
-import static google.registry.util.PreconditionsUtils.checkArgumentNotNull;
 import static org.joda.time.DateTimeZone.UTC;
 
 import com.beust.jcommander.Parameter;
@@ -26,8 +25,8 @@ import com.google.template.soy.data.SoyMapData;
 import google.registry.model.pricing.PremiumPricingEngine.DomainPrices;
 import google.registry.tools.soy.DomainCreateSoyInfo;
 import google.registry.util.StringGenerator;
-import javax.inject.Inject;
-import javax.inject.Named;
+import jakarta.inject.Inject;
+import jakarta.inject.Named;
 import org.joda.money.Money;
 import org.joda.time.DateTime;
 
@@ -58,9 +57,6 @@ final class CreateDomainCommand extends CreateOrUpdateDomainCommand {
 
   @Override
   protected void initMutatingEppToolCommand() {
-    checkArgumentNotNull(registrant, "Registrant must be specified");
-    checkArgument(!admins.isEmpty(), "At least one admin must be specified");
-    checkArgument(!techs.isEmpty(), "At least one tech must be specified");
     if (isNullOrEmpty(password)) {
       password = passwordGenerator.createString(PASSWORD_LENGTH);
     }
@@ -78,7 +74,7 @@ final class CreateDomainCommand extends CreateOrUpdateDomainCommand {
         Money createCost = prices.getCreateCost();
         currency = createCost.getCurrencyUnit().getCode();
         cost = createCost.multipliedBy(period).getAmount().toString();
-        System.out.printf(
+        printStream.printf(
             "NOTE: %s is premium at %s per year; sending total cost for %d year(s) of %s %s.\n",
             domain, createCost, period, currency, cost);
       }
@@ -89,9 +85,6 @@ final class CreateDomainCommand extends CreateOrUpdateDomainCommand {
               "domain", domain,
               "period", period,
               "nameservers", nameservers,
-              "registrant", registrant,
-              "admins", admins,
-              "techs", techs,
               "password", password,
               "currency", currency,
               "price", cost,

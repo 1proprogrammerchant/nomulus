@@ -24,6 +24,8 @@ import com.squareup.javapoet.MethodSpec;
 import com.squareup.javapoet.ParameterizedTypeName;
 import com.squareup.javapoet.TypeName;
 import com.squareup.javapoet.TypeSpec;
+import jakarta.persistence.AttributeConverter;
+import jakarta.persistence.Converter;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.List;
@@ -32,7 +34,6 @@ import java.util.Set;
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
-import javax.annotation.processing.SupportedSourceVersion;
 import javax.lang.model.SourceVersion;
 import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.AnnotationValue;
@@ -45,17 +46,22 @@ import javax.lang.model.type.TypeKind;
 import javax.lang.model.util.ElementFilter;
 import javax.lang.model.util.Elements;
 import javax.lang.model.util.Types;
-import javax.persistence.AttributeConverter;
-import javax.persistence.Converter;
 
 /** Processor to generate {@link AttributeConverter} for {@code VKey} type. */
 @SupportedAnnotationTypes("google.registry.persistence.WithVKey")
-@SupportedSourceVersion(SourceVersion.RELEASE_8)
 public class VKeyProcessor extends AbstractProcessor {
 
   private static final String CONVERTER_CLASS_NAME_TEMP = "VKeyConverter_%s";
 
   private static final String VKEY_TYPE_METHOD_NAME = "value";
+
+  @Override
+  public SourceVersion getSupportedSourceVersion() {
+    // Do not hardcode version. If JDK is not the same version, a warning is generated
+    // and breaks the build if `-Werror` is set. This is Safe because this class is a
+    // code generator, and can only cause build errors.
+    return SourceVersion.latestSupported();
+  }
 
   @Override
   public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
@@ -78,7 +84,7 @@ public class VKeyProcessor extends AbstractProcessor {
                               .collect(toImmutableList());
                       checkState(
                           actualAnnotations.size() == 1,
-                          "% can have only one @WithVKey annotation",
+                          "%s can have only one @WithVKey annotation",
                           simpleTypeName);
                       TypeName keyType = null;
                       for (Map.Entry<? extends ExecutableElement, ? extends AnnotationValue> entry :
@@ -137,11 +143,8 @@ public class VKeyProcessor extends AbstractProcessor {
 
     TypeSpec.Builder classBuilder =
         TypeSpec.classBuilder(converterClassName)
-            .addAnnotation(
-                AnnotationSpec.builder(ClassName.get(Converter.class))
-                    .addMember("autoApply", "true")
-                    .build())
-            .addModifiers(Modifier.FINAL)
+            .addAnnotation(AnnotationSpec.builder(ClassName.get(Converter.class)).build())
+            .addModifiers(Modifier.FINAL, Modifier.PUBLIC)
             .superclass(attributeConverter)
             .addMethod(getEntityClass)
             .addMethod(getKeyClass);

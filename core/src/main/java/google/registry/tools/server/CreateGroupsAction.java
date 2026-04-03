@@ -16,8 +16,8 @@ package google.registry.tools.server;
 
 import static google.registry.export.SyncGroupMembersAction.getGroupEmailAddressForContactType;
 import static google.registry.request.Action.Method.POST;
+import static jakarta.servlet.http.HttpServletResponse.SC_OK;
 import static java.util.Arrays.asList;
-import static javax.servlet.http.HttpServletResponse.SC_OK;
 
 import com.google.common.flogger.FluentLogger;
 import google.registry.config.RegistryConfig.Config;
@@ -32,18 +32,18 @@ import google.registry.request.Parameter;
 import google.registry.request.Response;
 import google.registry.request.auth.Auth;
 import google.registry.util.Concurrent;
+import jakarta.inject.Inject;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.List;
 import java.util.Optional;
-import javax.inject.Inject;
 
 /** Action that creates Google Groups for a registrar's mailing lists. */
 @Action(
-    service = Action.Service.TOOLS,
+    service = Action.Service.BACKEND,
     path = CreateGroupsAction.PATH,
     method = POST,
-    auth = Auth.AUTH_API_ADMIN)
+    auth = Auth.AUTH_ADMIN)
 public class CreateGroupsAction implements Runnable {
 
   public static final String PATH = "/_dr/admin/createGroups";
@@ -113,11 +113,11 @@ public class CreateGroupsAction implements Runnable {
   }
 
   private Registrar initAndLoadRegistrar() {
-    if (!clientId.isPresent()) {
+    if (clientId.isEmpty()) {
       respondToBadRequest("Error creating Google Groups, missing parameter: clientId");
     }
     Optional<Registrar> registrar = Registrar.loadByRegistrarId(clientId.get());
-    if (!registrar.isPresent()) {
+    if (registrar.isEmpty()) {
       respondToBadRequest(String.format(
           "Error creating Google Groups; could not find registrar with id %s", clientId.get()));
     }

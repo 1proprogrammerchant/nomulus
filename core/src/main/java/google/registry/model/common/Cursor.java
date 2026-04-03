@@ -24,14 +24,14 @@ import google.registry.model.UpdateAutoTimestampEntity;
 import google.registry.model.common.Cursor.CursorId;
 import google.registry.model.tld.Tld;
 import google.registry.persistence.VKey;
+import jakarta.persistence.AttributeOverride;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.Id;
+import jakarta.persistence.IdClass;
 import java.util.Optional;
-import javax.persistence.AttributeOverride;
-import javax.persistence.Column;
-import javax.persistence.Entity;
-import javax.persistence.EnumType;
-import javax.persistence.Enumerated;
-import javax.persistence.Id;
-import javax.persistence.IdClass;
 import org.joda.time.DateTime;
 
 /**
@@ -76,7 +76,7 @@ public class Cursor extends UpdateAutoTimestampEntity {
      *
      * <p>The way we solve this problem is by having {@code RdeUploadAction} check this cursor
      * before performing an upload for a given TLD. If the cursor is less than two hours old, the
-     * action will fail with a status code above 300 and App Engine will keep retrying the action
+     * action will fail with a status code above 300 and Cloud Tasks will keep retrying the action
      * until it's ready.
      */
     RDE_UPLOAD_SFTP(true),

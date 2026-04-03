@@ -26,8 +26,8 @@ import org.yaml.snakeyaml.Yaml;
  * <p>There are always two YAML configuration files that are used: the {@code default-config.yaml}
  * file, which contains default configuration for all environments, and the environment-specific
  * {@code nomulus-config-ENVIRONMENT.yaml} file, which contains overrides for the default values for
- * environment-specific settings such as the App Engine project ID. The environment-specific
- * configuration can be blank, but it must exist.
+ * environment-specific settings such as the project ID. The environment-specific configuration can
+ * be blank, but it must exist.
  */
 public final class YamlUtils {
 
@@ -86,7 +86,8 @@ public final class YamlUtils {
   @SuppressWarnings("unchecked")
   private static Map<String, Object> mergeMaps(
       Map<String, Object> defaultMap, Map<String, Object> customMap) {
-    for (String key : defaultMap.keySet()) {
+    for (Map.Entry<String, Object> e : defaultMap.entrySet()) {
+      String key = e.getKey();
       if (!customMap.containsKey(key)) {
         continue;
       }
@@ -99,7 +100,7 @@ public final class YamlUtils {
       } else {
         newValue = customMap.get(key);
       }
-      defaultMap.put(key, newValue);
+      e.setValue(newValue);
     }
     return defaultMap;
   }

@@ -41,10 +41,10 @@ import google.registry.request.Parameter;
 import google.registry.request.RequestParameters;
 import google.registry.request.Response;
 import google.registry.request.auth.Auth;
+import jakarta.inject.Inject;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Optional;
-import javax.inject.Inject;
 import org.bouncycastle.openpgp.PGPPrivateKey;
 import org.joda.time.DateTime;
 import org.joda.time.Duration;
@@ -56,7 +56,7 @@ import org.joda.time.Duration;
     service = Action.Service.BACKEND,
     path = RdeReportAction.PATH,
     method = POST,
-    auth = Auth.AUTH_API_ADMIN)
+    auth = Auth.AUTH_ADMIN)
 public final class RdeReportAction implements Runnable, EscrowTask {
 
   private static final FluentLogger logger = FluentLogger.forEnclosingClass();
@@ -99,7 +99,7 @@ public final class RdeReportAction implements Runnable, EscrowTask {
         RdeRevision.getCurrentRevision(tld, watermark, FULL)
             .orElseThrow(
                 () -> new IllegalStateException("RdeRevision was not set on generated deposit"));
-    if (!prefix.isPresent()) {
+    if (prefix.isEmpty()) {
       prefix = Optional.of(findMostRecentPrefixForWatermark(watermark, bucket, tld, gcsUtils));
     }
     String name = prefix.get() + RdeNamingUtils.makeRydeFilename(tld, watermark, FULL, 1, revision);

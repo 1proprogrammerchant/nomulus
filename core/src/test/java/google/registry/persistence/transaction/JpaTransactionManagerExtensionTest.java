@@ -17,15 +17,15 @@ package google.registry.persistence.transaction;
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.persistence.transaction.TransactionManagerFactory.replicaTm;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
-import static google.registry.testing.DatabaseHelper.insertInDb;
+import static google.registry.testing.DatabaseHelper.persistResource;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import google.registry.model.ImmutableObject;
 import google.registry.persistence.transaction.JpaTestExtensions.JpaUnitTestExtension;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Id;
+import jakarta.persistence.PersistenceException;
 import java.util.List;
-import javax.persistence.Entity;
-import javax.persistence.Id;
-import javax.persistence.PersistenceException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
@@ -64,10 +64,11 @@ public class JpaTransactionManagerExtensionTest {
     TestEntity testEntity = new TestEntity("foo", "bar");
     assertThat(
             assertThrows(
-                PersistenceException.class,
-                () -> replicaTm().transact(() -> replicaTm().put(testEntity))))
+                    PersistenceException.class,
+                    () -> replicaTm().transact(() -> replicaTm().put(testEntity)))
+                .getCause())
         .hasMessageThat()
-        .isEqualTo("Error while committing the transaction");
+        .startsWith("Error while committing the transaction");
   }
 
   @Test
@@ -75,7 +76,7 @@ public class JpaTransactionManagerExtensionTest {
     // This test verifies that 1) withEntityClass() has registered TestEntity and 2) The table
     // has been created, implying withProperty(HBM2DDL_AUTO, "update") worked.
     TestEntity original = new TestEntity("key", "value");
-    insertInDb(original);
+    persistResource(original);
     TestEntity retrieved =
         tm().transact(() -> tm().getEntityManager().find(TestEntity.class, "key"));
     assertThat(retrieved).isEqualTo(original);

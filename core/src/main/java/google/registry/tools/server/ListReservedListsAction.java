@@ -24,16 +24,16 @@ import google.registry.model.tld.label.ReservedList;
 import google.registry.model.tld.label.ReservedListDao;
 import google.registry.request.Action;
 import google.registry.request.auth.Auth;
+import jakarta.inject.Inject;
 import java.util.Comparator;
 import java.util.Optional;
-import javax.inject.Inject;
 
 /** A that lists reserved lists, for use by the {@code nomulus list_reserved_lists} command. */
 @Action(
-    service = Action.Service.TOOLS,
+    service = Action.Service.BACKEND,
     path = ListReservedListsAction.PATH,
     method = {GET, POST},
-    auth = Auth.AUTH_API_ADMIN)
+    auth = Auth.AUTH_ADMIN)
 public final class ListReservedListsAction extends ListObjectsAction<ReservedList> {
 
   public static final String PATH = "/_dr/admin/list/reservedLists";
@@ -52,8 +52,7 @@ public final class ListReservedListsAction extends ListObjectsAction<ReservedLis
                 tm().loadAllOf(ReservedList.class).stream()
                     .map(ReservedList::getName)
                     .map(ReservedListDao::getLatestRevision)
-                    .filter(Optional::isPresent)
-                    .map(Optional::get)
+                    .flatMap(Optional::stream)
                     .collect(toImmutableSortedSet(Comparator.comparing(ReservedList::getName))));
   }
 }

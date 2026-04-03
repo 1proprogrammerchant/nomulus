@@ -17,7 +17,6 @@ package google.registry.flows.poll;
 import static com.google.common.truth.Truth.assertThat;
 import static google.registry.testing.DatabaseHelper.createHistoryEntryForEppResource;
 import static google.registry.testing.DatabaseHelper.createTld;
-import static google.registry.testing.DatabaseHelper.persistActiveContact;
 import static google.registry.testing.DatabaseHelper.persistResource;
 import static google.registry.util.DateTimeUtils.END_OF_TIME;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -28,7 +27,6 @@ import google.registry.flows.poll.PollAckFlow.InvalidMessageIdException;
 import google.registry.flows.poll.PollAckFlow.MessageDoesNotExistException;
 import google.registry.flows.poll.PollAckFlow.MissingMessageIdException;
 import google.registry.flows.poll.PollAckFlow.NotAuthorizedToAckMessageException;
-import google.registry.model.contact.Contact;
 import google.registry.model.domain.Domain;
 import google.registry.model.poll.PollMessage;
 import google.registry.testing.DatabaseHelper;
@@ -43,7 +41,6 @@ class PollAckFlowTest extends FlowTestCase<PollAckFlow> {
   private static final long MESSAGE_ID = 3;
 
   private Domain domain;
-  private Contact contact;
 
   @BeforeEach
   void setUp() {
@@ -51,8 +48,7 @@ class PollAckFlowTest extends FlowTestCase<PollAckFlow> {
     clock.setTo(DateTime.parse("2011-01-02T01:01:01Z"));
     setRegistrarIdForFlow("NewRegistrar");
     createTld("example");
-    contact = persistActiveContact("jd1234");
-    domain = persistResource(DatabaseHelper.newDomain("test.example", contact));
+    domain = persistResource(DatabaseHelper.newDomain("test.example"));
   }
 
   private void persistOneTimePollMessage(long messageId) {
@@ -86,47 +82,10 @@ class PollAckFlowTest extends FlowTestCase<PollAckFlow> {
   }
 
   @Test
-  void testSuccess_contactPollMessage() throws Exception {
-    setEppInput("poll_ack.xml", ImmutableMap.of("MSGID", "3-2011"));
-    persistResource(
-        new PollMessage.OneTime.Builder()
-            .setId(MESSAGE_ID)
-            .setRegistrarId(getRegistrarIdForFlow())
-            .setEventTime(clock.nowUtc().minusDays(1))
-            .setMsg("Some poll message.")
-            .setHistoryEntry(createHistoryEntryForEppResource(contact))
-            .build());
-    assertTransactionalFlow(true);
-    runFlowAssertResponse(loadFile("poll_ack_response_empty.xml"));
-  }
-
-  @Test
-  void testFailure_contactPollMessage_withIncorrectYearField() throws Exception {
-    setEppInput("poll_ack.xml", ImmutableMap.of("MSGID", "3-1999"));
-    persistResource(
-        new PollMessage.OneTime.Builder()
-            .setId(MESSAGE_ID)
-            .setRegistrarId(getRegistrarIdForFlow())
-            .setEventTime(clock.nowUtc().minusDays(1))
-            .setMsg("Some poll message.")
-            .setHistoryEntry(createHistoryEntryForEppResource(contact))
-            .build());
-    assertTransactionalFlow(true);
-    assertThrows(MessageDoesNotExistException.class, this::runFlow);
-  }
-
-  @Test
-  void testSuccess_messageOnContact() throws Exception {
-    persistOneTimePollMessage(MESSAGE_ID);
-    assertTransactionalFlow(true);
-    runFlowAssertResponse(loadFile("poll_ack_response_empty.xml"));
-  }
-
-  @Test
   void testSuccess_recentActiveAutorenew() throws Exception {
     setEppInput("poll_ack.xml", ImmutableMap.of("MSGID", "3-2010"));
     persistAutorenewPollMessage(clock.nowUtc().minusMonths(6), END_OF_TIME);
-    assertTransactionalFlow(true);
+    assertMutatingFlow(true);
     runFlowAssertResponse(loadFile("poll_ack_response_empty.xml"));
   }
 
@@ -139,7 +98,7 @@ class PollAckFlowTest extends FlowTestCase<PollAckFlow> {
     for (int i = 1; i < 4; i++) {
       persistOneTimePollMessage(MESSAGE_ID + i);
     }
-    assertTransactionalFlow(true);
+    assertMutatingFlow(true);
     runFlowAssertResponse(
         loadFile("poll_ack_response.xml", ImmutableMap.of("MSGID", "3-2009", "COUNT", "4")));
   }
@@ -148,7 +107,7 @@ class PollAckFlowTest extends FlowTestCase<PollAckFlow> {
   void testSuccess_oldInactiveAutorenew() throws Exception {
     setEppInput("poll_ack.xml", ImmutableMap.of("MSGID", "3-2010"));
     persistAutorenewPollMessage(clock.nowUtc().minusMonths(6), clock.nowUtc());
-    assertTransactionalFlow(true);
+    assertMutatingFlow(true);
     runFlowAssertResponse(loadFile("poll_ack_response_empty.xml"));
   }
 
@@ -158,14 +117,14 @@ class PollAckFlowTest extends FlowTestCase<PollAckFlow> {
     for (int i = 0; i < 5; i++) {
       persistOneTimePollMessage(MESSAGE_ID + i);
     }
-    assertTransactionalFlow(true);
+    assertMutatingFlow(true);
     runFlowAssertResponse(
         loadFile("poll_ack_response.xml", ImmutableMap.of("MSGID", "3-2011", "COUNT", "4")));
   }
 
   @Test
   void testFailure_noSuchMessage() throws Exception {
-    assertTransactionalFlow(true);
+    assertMutatingFlow(true);
     Exception e = assertThrows(MessageDoesNotExistException.class, this::runFlow);
     assertThat(e).hasMessageThat().contains(String.format("(%d-2011)", MESSAGE_ID));
   }
@@ -173,43 +132,28 @@ class PollAckFlowTest extends FlowTestCase<PollAckFlow> {
   @Test
   void testFailure_invalidId_tooFewComponents() throws Exception {
     setEppInput("poll_ack.xml", ImmutableMap.of("MSGID", "1"));
-    assertTransactionalFlow(true);
+    assertMutatingFlow(true);
     assertThrows(InvalidMessageIdException.class, this::runFlow);
   }
 
   @Test
   void testFailure_invalidId_tooManyComponents() throws Exception {
     setEppInput("poll_ack.xml", ImmutableMap.of("MSGID", "2-2-1999-2007"));
-    assertTransactionalFlow(true);
-    assertThrows(InvalidMessageIdException.class, this::runFlow);
-  }
-
-  @Test
-  void testFailure_contactPollMessage_withMissingYearField() throws Exception {
-    setEppInput("poll_ack.xml", ImmutableMap.of("MSGID", "3"));
-    persistResource(
-        new PollMessage.OneTime.Builder()
-            .setId(MESSAGE_ID)
-            .setRegistrarId(getRegistrarIdForFlow())
-            .setEventTime(clock.nowUtc().minusDays(1))
-            .setMsg("Some poll message.")
-            .setHistoryEntry(createHistoryEntryForEppResource(contact))
-            .build());
-    assertTransactionalFlow(true);
+    assertMutatingFlow(true);
     assertThrows(InvalidMessageIdException.class, this::runFlow);
   }
 
   @Test
   void testFailure_invalidId_stringInsteadOfNumeric() throws Exception {
     setEppInput("poll_ack.xml", ImmutableMap.of("MSGID", "ABC-12345"));
-    assertTransactionalFlow(true);
+    assertMutatingFlow(true);
     assertThrows(InvalidMessageIdException.class, this::runFlow);
   }
 
   @Test
   void testFailure_missingId() throws Exception {
     setEppInput("poll_ack_missing_id.xml");
-    assertTransactionalFlow(true);
+    assertMutatingFlow(true);
     assertThrows(MissingMessageIdException.class, this::runFlow);
   }
 
@@ -223,7 +167,7 @@ class PollAckFlowTest extends FlowTestCase<PollAckFlow> {
             .setMsg("Some poll message.")
             .setHistoryEntry(createHistoryEntryForEppResource(domain))
             .build());
-    assertTransactionalFlow(true);
+    assertMutatingFlow(true);
     assertThrows(NotAuthorizedToAckMessageException.class, this::runFlow);
   }
 
@@ -237,7 +181,7 @@ class PollAckFlowTest extends FlowTestCase<PollAckFlow> {
             .setMsg("Some poll message.")
             .setHistoryEntry(createHistoryEntryForEppResource(domain))
             .build());
-    assertTransactionalFlow(true);
+    assertMutatingFlow(true);
     Exception e = assertThrows(MessageDoesNotExistException.class, this::runFlow);
     assertThat(e).hasMessageThat().contains(String.format("(%d-2011)", MESSAGE_ID));
   }

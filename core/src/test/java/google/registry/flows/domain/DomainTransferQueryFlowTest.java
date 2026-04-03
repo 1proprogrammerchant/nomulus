@@ -29,7 +29,6 @@ import google.registry.flows.ResourceFlowUtils.BadAuthInfoForResourceException;
 import google.registry.flows.ResourceFlowUtils.ResourceDoesNotExistException;
 import google.registry.flows.exceptions.NoTransferHistoryToQueryException;
 import google.registry.flows.exceptions.NotAuthorizedToViewTransferException;
-import google.registry.model.contact.ContactAuthInfo;
 import google.registry.model.domain.Domain;
 import google.registry.model.domain.DomainAuthInfo;
 import google.registry.model.eppcommon.AuthInfo.PasswordAuth;
@@ -52,10 +51,8 @@ class DomainTransferQueryFlowTest
   private void doSuccessfulTest(
       String commandFilename, String expectedXmlFilename, int numPollMessages) throws Exception {
     setEppInput(commandFilename);
-    // Replace the ROID in the xml file with the one generated in our test.
-    eppLoader.replaceAll("JD1234-REP", contact.getRepoId());
     // Setup done; run the test.
-    assertTransactionalFlow(false);
+    assertMutatingFlow(false);
     runFlowAssertResponse(loadFile(expectedXmlFilename));
     assertAboutDomains()
         .that(domain)
@@ -73,10 +70,8 @@ class DomainTransferQueryFlowTest
 
   private void doFailingTest(String commandFilename) throws Exception {
     setEppInput(commandFilename);
-    // Replace the ROID in the xml file with the one generated in our test.
-    eppLoader.replaceAll("JD1234-REP", contact.getRepoId());
     // Setup done; run the test.
-    assertTransactionalFlow(false);
+    assertMutatingFlow(false);
     runFlow();
   }
 
@@ -103,13 +98,6 @@ class DomainTransferQueryFlowTest
     setRegistrarIdForFlow("ClientZ");
     doSuccessfulTest(
         "domain_transfer_query_domain_authinfo.xml", "domain_transfer_query_response.xml", 1);
-  }
-
-  @Test
-  void testSuccess_contactAuthInfo() throws Exception {
-    setRegistrarIdForFlow("ClientZ");
-    doSuccessfulTest(
-        "domain_transfer_query_contact_authinfo.xml", "domain_transfer_query_response.xml", 1);
   }
 
   @Test
@@ -155,7 +143,8 @@ class DomainTransferQueryFlowTest
         persistResource(
             domain
                 .asBuilder()
-                .setRegistrationExpirationTime(domain.getRegistrationExpirationTime().plusYears(9))
+                .setRegistrationExpirationTime(
+                    domain.getRegistrationExpirationDateTime().plusYears(9))
                 .build());
     doSuccessfulTest("domain_transfer_query.xml", "domain_transfer_query_response_10_years.xml", 1);
   }
@@ -170,14 +159,7 @@ class DomainTransferQueryFlowTest
   }
 
   @Test
-  void testFailure_badContactPassword() {
-    // Change the contact's password so it does not match the password in the file.
-    contact =
-        persistResource(
-            contact
-                .asBuilder()
-                .setAuthInfo(ContactAuthInfo.create(PasswordAuth.create("badpassword")))
-                .build());
+  void testFailure_contactPasswordNotAllowed() {
     EppException thrown =
         assertThrows(
             BadAuthInfoForResourceException.class,
@@ -252,7 +234,7 @@ class DomainTransferQueryFlowTest
     // Set the clock to just past the extended registration time.  We'd expect the domain to have
     // auto-renewed once, but the transfer query response should be the same.
     clock.setTo(EXTENDED_REGISTRATION_EXPIRATION_TIME.plusMillis(1));
-    assertThat(domain.cloneProjectedAtTime(clock.nowUtc()).getRegistrationExpirationTime())
+    assertThat(domain.cloneProjectedAtTime(clock.nowUtc()).getRegistrationExpirationDateTime())
         .isEqualTo(EXTENDED_REGISTRATION_EXPIRATION_TIME.plusYears(1));
     doSuccessfulTest(
         "domain_transfer_query.xml", "domain_transfer_query_response_server_approved.xml", 2);

@@ -19,6 +19,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.collect.Sets.difference;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
+import static google.registry.flows.FlowUtils.marshalWithLenientRetry;
 import static google.registry.model.eppcommon.EppXmlTransformer.marshal;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
 import static google.registry.testing.DatabaseHelper.stripBillingEventId;
@@ -36,6 +37,7 @@ import google.registry.flows.EppTestComponent.FakesAndMocksModule;
 import google.registry.flows.picker.FlowPicker;
 import google.registry.model.billing.BillingBase;
 import google.registry.model.domain.GracePeriod;
+import google.registry.model.eppcommon.EppXmlTransformer;
 import google.registry.model.eppcommon.ProtocolDefinition;
 import google.registry.model.eppinput.EppInput;
 import google.registry.model.eppoutput.EppOutput;
@@ -54,6 +56,7 @@ import google.registry.xml.ValidationMode;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 import javax.annotation.Nullable;
 import org.joda.time.DateTime;
 import org.junit.jupiter.api.BeforeEach;
@@ -112,6 +115,10 @@ public abstract class FlowTestCase<F extends Flow> {
     eppLoader = new EppLoader(this, inputFilename, substitutions);
   }
 
+  protected void setEppInputXml(String eppXml) {
+    eppLoader = new EppLoader(eppXml);
+  }
+
   /** Returns the EPP data loaded by a previous call to setEppInput. */
   protected EppInput getEppInput() throws EppException {
     return eppLoader.getEpp();
@@ -145,14 +152,14 @@ public abstract class FlowTestCase<F extends Flow> {
     sessionMetadata.setRegistrarId(registrarId);
   }
 
-  public void assertTransactionalFlow(boolean isTransactional) throws Exception {
+  public void assertMutatingFlow(boolean isMutating) throws Exception {
     Class<? extends Flow> flowClass = FlowPicker.getFlowClass(eppLoader.getEpp());
-    if (isTransactional) {
-      assertThat(flowClass).isAssignableTo(TransactionalFlow.class);
+    if (isMutating) {
+      assertThat(flowClass).isAssignableTo(MutatingFlow.class);
     } else {
       // There's no "isNotAssignableTo" in Truth.
-      assertWithMessage(flowClass.getSimpleName() + " implements TransactionalFlow")
-          .that(TransactionalFlow.class.isAssignableFrom(flowClass))
+      assertWithMessage(flowClass.getSimpleName() + " implements MutatingFlow")
+          .that(MutatingFlow.class.isAssignableFrom(flowClass))
           .isFalse();
     }
   }
@@ -175,7 +182,7 @@ public abstract class FlowTestCase<F extends Flow> {
           GracePeriod.create(
               entry.getKey().getType(),
               entry.getKey().getDomainRepoId(),
-              entry.getKey().getExpirationTime(),
+              entry.getKey().getExpirationDateTime(),
               entry.getKey().getRegistrarId(),
               null,
               1L),
@@ -263,6 +270,8 @@ public abstract class FlowTestCase<F extends Flow> {
     if (output.isResponse()) {
       assertThat(output.isSuccess()).isTrue();
     }
+    // Verify that expected xml is syntatically correct.
+    EppXmlTransformer.validateOutput(xml);
     try {
       assertXmlEquals(
           xml, new String(marshal(output, ValidationMode.STRICT), UTF_8), ignoredPathsPlusTrid);
@@ -277,6 +286,7 @@ public abstract class FlowTestCase<F extends Flow> {
               Arrays.toString(marshal(output, ValidationMode.LENIENT))),
           e);
     }
+    verifyFeeTagNormalized(new String(marshalWithLenientRetry(output), UTF_8));
     return output;
   }
 
@@ -290,5 +300,15 @@ public abstract class FlowTestCase<F extends Flow> {
 
   public EppOutput runFlowAssertResponse(String xml, String... ignoredPaths) throws Exception {
     return runFlowAssertResponse(CommitMode.LIVE, UserPrivileges.NORMAL, xml, ignoredPaths);
+  }
+
+  // Pattern for non-normalized tags in use. Occurrences in namespace declarations ignored.
+  private static final Pattern NON_NORMALIZED_FEE_TAGS =
+      Pattern.compile("\\bfee11:|\\bfee12:|\\bfee_1_00:");
+
+  static void verifyFeeTagNormalized(String xml) {
+    assertWithMessage("Unexpected un-normalized Fee tags found in message.")
+        .that(NON_NORMALIZED_FEE_TAGS.matcher(xml).find())
+        .isFalse();
   }
 }

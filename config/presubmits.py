@@ -25,7 +25,11 @@ import textwrap
 import re
 
 # We should never analyze any generated files
-UNIVERSALLY_SKIPPED_PATTERNS = {"/build/", "cloudbuild-caches", "/out/", ".git/", ".gradle/", "/dist/", "karma.conf.js", "polyfills.ts", "test.ts", "/docs/console-endpoints/"}
+UNIVERSALLY_SKIPPED_PATTERNS = {"/build/", "cloudbuild-caches", "/out/", ".git/",
+     ".gradle/", "/dist/", "/console-alpha/", "/console-crash/", "/console-qa",
+     "/console-sandbox", "/console-production", "karma.conf.js", "polyfills.ts",
+     "test.ts", "/docs/console-endpoints/", "/bin/generated-sources/",
+     "/bin/generated-test-sources/", "src/main/generated", "src/test/generated"}
 # We can't rely on CI to have the Enum package installed so we do this instead.
 FORBIDDEN = 1
 REQUIRED = 2
@@ -87,24 +91,22 @@ PRESUBMITS = {
     PresubmitCheck(
         r".*Copyright 20\d{2} The Nomulus Authors\. All Rights Reserved\.",
         ("java", "js", "soy", "sql", "py", "sh", "gradle", "ts"), {
-            ".git", "/build/", "/generated/", "/generated_tests/",
-            "node_modules/", "LoggerConfig.java", "registrar_bin.",
+            ".git", "/build/", "node_modules/", "LoggerConfig.java", "registrar_bin.",
             "registrar_dbg.", "google-java-format-diff.py",
             "nomulus.golden.sql", "soyutils_usegoog.js", "javascript/checks.js"
         }, REQUIRED):
         "File did not include the license header.",
 
     # Files must end in a newline
-    PresubmitCheck(r".*\n$", ("java", "js", "soy", "sql", "py", "sh", "gradle", "ts"),
-                   {"node_modules/"}, REQUIRED):
+    PresubmitCheck(r".*\n$", ("java", "js", "soy", "sql", "py", "sh", "gradle", "ts", "xml"),
+                   {"node_modules/", ".idea"}, REQUIRED):
         "Source files must end in a newline.",
 
-    # System.(out|err).println should only appear in tools/
+    # System.(out|err).println should only appear in tools/ or load-testing/
     PresubmitCheck(
         r".*\bSystem\.(out|err)\.print", "java", {
-            "StackdriverDashboardBuilder.java", "/tools/", "/example/",
-            "RegistryTestServerMain.java", "TestServerExtension.java",
-            "FlowDocumentationTool.java"
+            "/tools/", "/example/", "/load-testing/",
+            "RegistryTestServerMain.java", "TestServerExtension.java"
         }):
         "System.(out|err).println is only allowed in tools/ packages. Please "
         "use a logger instead.",
@@ -117,7 +119,7 @@ PRESUBMITS = {
     ):
         "In SOY please use the ({@param name: string} /** User name. */) style"
         " parameter passing instead of the ( * @param name User name.) style "
-        "parameter pasing.",
+        "parameter passing.",
     PresubmitCheck(
         r'.*\{[^}]+\w+:\s+"',
         "soy",
@@ -136,41 +138,56 @@ PRESUBMITS = {
         {},
     ):
         "All soy templates must use strict autoescaping",
-
-    # various JS linting checks
     PresubmitCheck(
-        r".*goog\.base\(",
-        "js",
+        r".*\nimport (static )?.*\.shaded\..*",
+        "java",
         {"/node_modules/"},
     ):
-        "Use of goog.base is not allowed.",
+        "Do not use shaded dependencies",
     PresubmitCheck(
-        r".*goog\.dom\.classes",
-        "js",
+        r".*com\.google\.common\.truth\.Truth8.*",
+        "java",
         {"/node_modules/"},
     ):
-        "Instead of goog.dom.classes, use goog.dom.classlist which is smaller "
-        "and faster.",
+        "Truth8 is deprecated. Use Truth instead.",
     PresubmitCheck(
-        r".*goog\.getMsg",
-        "js",
+        r".*java\.util\.Date.*",
+        "java",
+        {"/node_modules/", "JpaTransactionManagerImpl.java"},
+    ):
+        "Do not use java.util.Date. Use classes in java.time package instead.",
+    PresubmitCheck(
+        r".*com\.google\.api\.client\.http\.HttpStatusCodes.*",
+        "java",
         {"/node_modules/"},
     ):
-        "Put messages in Soy, instead of using goog.getMsg().",
+        "Use status code from jakarta.servlet.http.HttpServletResponse.",
     PresubmitCheck(
-        r".*(innerHTML|outerHTML)\s*(=|[+]=)([^=]|$)",
-        "js",
-        {"/node_modules/", "registrar_bin."},
+        r".*mock\(Response\.class\).*",
+        "java",
+        {"/node_modules/"},
     ):
-        "Do not assign directly to the dom. Use goog.dom.setTextContent to set"
-        " to plain text, goog.dom.removeChildren to clear, or "
-        "soy.renderElement to render anything else",
+        "Do not mock Response, use FakeResponse.",
     PresubmitCheck(
-        r".*console\.(log|info|warn|error)",
-        "js",
-        {"/node_modules/", "google/registry/ui/js/util.js", "registrar_bin."},
+        r".*javax\.servlet\..*",
+        "java",
+        {"/node_modules/"},
     ):
-        "JavaScript files should not include console logging.",
+        "Do not use javax.servlet.* Use jakarta.servlet.* instead.",
+    PresubmitCheck(
+        r".*javax\.inject\..*",
+        "java",
+        {"/node_modules/"},
+    ):
+        "Do not use javax.inject.* Use jakarta.inject.* instead.",
+    PresubmitCheck(
+        r".*import jakarta.persistence.(Pre|Post)(Persist|Load|Remove|Update);",
+        "java",
+        {"EntityCallbacksListener.java"},
+    ):
+        "Hibernate lifecycle events aren't called for embedded entities, so it's "
+        "usually best to avoid them. Instead, use the annotations defined in "
+        "EntityCallbacksListener.java"
 }
 
 # Note that this regex only works for one kind of Flyway file.  If we want to
@@ -258,26 +275,6 @@ def verify_flyway_index():
   return not success
 
 
-def verify_javascript_deps():
-  """Verifies that we haven't introduced any new javascript dependencies."""
-  with open('package.json') as f:
-    package = json.load(f)
-
-  deps = list(package['dependencies'].keys())
-  if deps != EXPECTED_JS_PACKAGES:
-    print('Unexpected javascript dependencies.  Was expecting '
-          '%s, got %s.' % (EXPECTED_JS_PACKAGES, deps))
-    print(textwrap.dedent("""
-        * If the new dependencies are intentional, please verify that the
-        * license is one of the allowed licenses (see
-        * config/dependency-license/allowed_licenses.json) and add an entry
-        * for the package (with the license in a comment) to the
-        * EXPECTED_JS_PACKAGES variable in config/presubmits.py.
-        """))
-    return True
-  return False
-
-
 def get_files():
   for root, dirnames, filenames in os.walk("."):
     for filename in filenames:
@@ -285,7 +282,6 @@ def get_files():
 
 
 if __name__ == "__main__":
-  print('python version is %s' % sys.version)
   failed = False
   for file in get_files():
     error_messages = []
@@ -301,9 +297,6 @@ if __name__ == "__main__":
   # index is up-to-date.  It's quicker to do it here than in the unit tests:
   # when we put it here it fails fast before all of the tests are run.
   failed |= verify_flyway_index()
-
-  # Make sure we haven't introduced any javascript dependencies.
-  failed |= verify_javascript_deps()
 
   if failed:
     sys.exit(1)

@@ -27,6 +27,10 @@ import static google.registry.beam.rde.RdePipeline.TupleTags.REVISION_ID;
 import static google.registry.beam.rde.RdePipeline.TupleTags.SUPERORDINATE_DOMAINS;
 import static google.registry.model.reporting.HistoryEntryDao.RESOURCE_TYPES_TO_HISTORY_TYPES;
 import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
+import static google.registry.util.SafeSerializationUtils.safeDeserializeCollection;
+import static google.registry.util.SafeSerializationUtils.serializeCollection;
+import static google.registry.util.SerializeUtils.decodeBase64;
+import static google.registry.util.SerializeUtils.encodeBase64;
 import static org.apache.beam.sdk.values.TypeDescriptors.kvs;
 
 import com.google.common.collect.ImmutableList;
@@ -46,8 +50,6 @@ import google.registry.config.CredentialModule;
 import google.registry.config.RegistryConfig.ConfigModule;
 import google.registry.gcs.GcsUtils;
 import google.registry.model.EppResource;
-import google.registry.model.contact.Contact;
-import google.registry.model.contact.ContactHistory;
 import google.registry.model.domain.Domain;
 import google.registry.model.domain.DomainHistory;
 import google.registry.model.host.Host;
@@ -65,15 +67,10 @@ import google.registry.rde.PendingDeposit.PendingDepositCoder;
 import google.registry.rde.RdeMarshaller;
 import google.registry.util.UtilsModule;
 import google.registry.xml.ValidationMode;
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
+import jakarta.inject.Inject;
+import jakarta.inject.Singleton;
 import java.io.IOException;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
 import java.io.Serializable;
-import java.util.HashSet;
-import javax.inject.Inject;
-import javax.inject.Singleton;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.PipelineResult;
 import org.apache.beam.sdk.coders.KvCoder;
@@ -116,14 +113,14 @@ import org.joda.time.DateTime;
  * <p>The pipeline is broadly divided into two parts -- creating the {@link DepositFragment}s, and
  * processing them.
  *
- * <h1>Creating {@link DepositFragment}</h1>
+ * <h2>Creating {@link DepositFragment}</h2>
  *
- * <h2>{@link Registrar}</h2>
+ * <h3>{@link Registrar}</h3>
  *
  * Non-test registrar entities are loaded from Cloud SQL and marshalled into deposit fragments. They
  * are <b>NOT</b> rewound to the watermark.
  *
- * <h2>{@link EppResource}</h2>
+ * <h3>{@link EppResource}</h3>
  *
  * All EPP resources are loaded from the corresponding {@link HistoryEntry}, which has the resource
  * embedded. In general, we find most recent history entry before watermark and filter out the ones
@@ -138,27 +135,23 @@ import org.joda.time.DateTime;
  * pairs of (contact/host repo ID: pending deposit) for all RDE pending deposits for further
  * processing.
  *
- * <h3>{@link Contact}</h3>
- *
- * We first join most recent contact histories, represented by (contact repo ID: contact history
- * revision ID) pairs, with referenced contacts, represented by (contact repo ID: pending deposit)
- * pairs, on the contact repo ID, to remove unreferenced contact histories. Contact resources are
- * then loaded from the remaining referenced contact histories, and marshalled into (pending
- * deposit: deposit fragment) pairs.
- *
  * <h3>{@link Host}</h3>
  *
- * Similar to {@link Contact}, we join the most recent host history with referenced hosts to find
- * most recent referenced hosts. For external hosts we do the same treatment as we did on contacts
- * and obtain the (pending deposit: deposit fragment) pairs. For subordinate hosts, we need to find
- * the superordinate domain in order to properly handle pending transfer in the deposit as well. So
- * we first find the superordinate domain repo ID from the host and join the (superordinate domain
- * repo ID: (subordinate host repo ID: (pending deposit: revision ID))) pair with the (domain repo
- * ID: revision ID) pair obtained from the domain history query in order to map the host at
- * watermark to the domain at watermark. We then proceed to create the (pending deposit: deposit
- * fragment) pair for subordinate hosts using the added domain information.
+ * <p>We first join most recent host histories, represented by (host repo ID: host history revision
+ * ID) pairs, with referenced hosts, represented by (host repo ID: pending deposit) pairs, on the
+ * host repo ID, to remove unreferenced host histories. Host resources are then loaded from the
+ * remaining referenced host histories, and marshalled into (pending deposit: deposit fragment)
+ * pairs.
  *
- * <h1>Processing {@link DepositFragment}</h1>
+ * <p>For subordinate hosts, we need to find the superordinate domain in order to properly handle
+ * pending transfer in the deposit as well. So we first find the superordinate domain repo ID from
+ * the host and join the (superordinate domain repo ID: (subordinate host repo ID: (pending deposit:
+ * revision ID))) pair with the (domain repo ID: revision ID) pair obtained from the domain history
+ * query in order to map the host at watermark to the domain at watermark. We then proceed to create
+ * the (pending deposit: deposit fragment) pair for subordinate hosts using the added domain
+ * information.
+ *
+ * <h2>Processing {@link DepositFragment}</h2>
  *
  * The (pending deposit: deposit fragment) pairs from different resources are combined and grouped
  * by pending deposit. For each pending deposit, all the relevant deposit fragments are written into
@@ -184,10 +177,10 @@ public class RdePipeline implements Serializable {
   private final CloudTasksUtils cloudTasksUtils;
   private final RdeMarshaller marshaller;
 
-  // Registrars to be excluded from data escrow. Not including the sandbox-only OTE type so that
-  // if sneaks into production we would get an extra signal.
+  // Registrars to be excluded from data escrow (i.e. all registrar types that have a null IANA
+  // identifier and thus would not be valid according to the RDE schema).
   private static final ImmutableSet<Type> IGNORED_REGISTRAR_TYPES =
-      Sets.immutableEnumSet(Registrar.Type.MONITORING, Registrar.Type.TEST);
+      Sets.immutableEnumSet(Registrar.Type.MONITORING, Registrar.Type.OTE, Registrar.Type.TEST);
 
   private static final FluentLogger logger = FluentLogger.forEnclosingClass();
 
@@ -230,9 +223,6 @@ public class RdePipeline implements Serializable {
     PCollection<KV<String, Long>> domainHistories =
         getMostRecentHistoryEntries(pipeline, DomainHistory.class);
 
-    PCollection<KV<String, Long>> contactHistories =
-        getMostRecentHistoryEntries(pipeline, ContactHistory.class);
-
     PCollection<KV<String, Long>> hostHistories =
         getMostRecentHistoryEntries(pipeline, HostHistory.class);
 
@@ -240,10 +230,6 @@ public class RdePipeline implements Serializable {
 
     PCollection<KV<PendingDeposit, DepositFragment>> domainFragments =
         processedDomainHistories.get(DOMAIN_FRAGMENTS);
-
-    PCollection<KV<PendingDeposit, DepositFragment>> contactFragments =
-        processContactHistories(
-            processedDomainHistories.get(REFERENCED_CONTACTS), contactHistories);
 
     PCollectionTuple processedHosts =
         processHostHistories(processedDomainHistories.get(REFERENCED_HOSTS), hostHistories);
@@ -256,7 +242,6 @@ public class RdePipeline implements Serializable {
 
     return PCollectionList.of(registrarFragments)
         .and(domainFragments)
-        .and(contactFragments)
         .and(externalHostFragments)
         .and(subordinateHostFragments)
         .apply(
@@ -437,7 +422,6 @@ public class RdePipeline implements Serializable {
   private PCollectionTuple processDomainHistories(PCollection<KV<String, Long>> domainHistories) {
     Counter activeDomainCounter = Metrics.counter("RDE", "ActiveDomainBase");
     Counter domainFragmentCounter = Metrics.counter("RDE", "DomainFragment");
-    Counter referencedContactCounter = Metrics.counter("RDE", "ReferencedContact");
     Counter referencedHostCounter = Metrics.counter("RDE", "ReferencedHost");
     return domainHistories.apply(
         "Map DomainHistory to DepositFragment " + "and emit referenced Contact and Host",
@@ -463,22 +447,8 @@ public class RdePipeline implements Serializable {
                                       KV.of(
                                           pendingDeposit,
                                           marshaller.marshalDomain(domain, pendingDeposit.mode())));
-                              // Contacts and hosts are only deposited in RDE, not BRDA.
+                              // Hosts are only deposited in RDE, not BRDA.
                               if (pendingDeposit.mode() == RdeMode.FULL) {
-                                HashSet<Serializable> contacts = new HashSet<>();
-                                contacts.add(domain.getAdminContact().getKey());
-                                contacts.add(domain.getTechContact().getKey());
-                                contacts.add(domain.getRegistrant().getKey());
-                                // Billing contact is not mandatory.
-                                if (domain.getBillingContact() != null) {
-                                  contacts.add(domain.getBillingContact().getKey());
-                                }
-                                referencedContactCounter.inc(contacts.size());
-                                contacts.forEach(
-                                    contactRepoId ->
-                                        receiver
-                                            .get(REFERENCED_CONTACTS)
-                                            .output(KV.of((String) contactRepoId, pendingDeposit)));
                                 if (domain.getNsHosts() != null) {
                                   referencedHostCounter.inc(domain.getNsHosts().size());
                                   domain
@@ -498,38 +468,6 @@ public class RdePipeline implements Serializable {
                 })
             .withOutputTags(
                 DOMAIN_FRAGMENTS, TupleTagList.of(REFERENCED_CONTACTS).and(REFERENCED_HOSTS)));
-  }
-
-  private PCollection<KV<PendingDeposit, DepositFragment>> processContactHistories(
-      PCollection<KV<String, PendingDeposit>> referencedContacts,
-      PCollection<KV<String, Long>> contactHistories) {
-    Counter contactFragmentCounter = Metrics.counter("RDE", "ContactFragment");
-    return removeUnreferencedResource(referencedContacts, contactHistories, Contact.class)
-        .apply(
-            "Map Contact to DepositFragment",
-            FlatMapElements.into(
-                    kvs(
-                        TypeDescriptor.of(PendingDeposit.class),
-                        TypeDescriptor.of(DepositFragment.class)))
-                .via(
-                    (KV<String, CoGbkResult> kv) -> {
-                      Contact contact =
-                          (Contact)
-                              loadResourceByHistoryEntryId(
-                                  ContactHistory.class,
-                                  kv.getKey(),
-                                  kv.getValue().getAll(REVISION_ID));
-                      DepositFragment fragment = marshaller.marshalContact(contact);
-                      ImmutableSet<KV<PendingDeposit, DepositFragment>> fragments =
-                          Streams.stream(kv.getValue().getAll(PENDING_DEPOSIT))
-                              // The same contact could be used by multiple domains, therefore
-                              // matched to the same pending deposit multiple times.
-                              .distinct()
-                              .map(pendingDeposit -> KV.of(pendingDeposit, fragment))
-                              .collect(toImmutableSet());
-                      contactFragmentCounter.inc(fragments.size());
-                      return fragments;
-                    }));
   }
 
   private PCollectionTuple processHostHistories(
@@ -658,14 +596,8 @@ public class RdePipeline implements Serializable {
    */
   @SuppressWarnings("unchecked")
   static ImmutableSet<PendingDeposit> decodePendingDeposits(String encodedPendingDeposits) {
-    try (ObjectInputStream ois =
-        new ObjectInputStream(
-            new ByteArrayInputStream(
-                BaseEncoding.base64Url().omitPadding().decode(encodedPendingDeposits)))) {
-      return (ImmutableSet<PendingDeposit>) ois.readObject();
-    } catch (IOException | ClassNotFoundException e) {
-      throw new IllegalArgumentException("Unable to parse encoded pending deposit map.", e);
-    }
+    return ImmutableSet.copyOf(
+        safeDeserializeCollection(PendingDeposit.class, decodeBase64(encodedPendingDeposits)));
   }
 
   /**
@@ -674,12 +606,7 @@ public class RdePipeline implements Serializable {
    */
   public static String encodePendingDeposits(ImmutableSet<PendingDeposit> pendingDeposits)
       throws IOException {
-    try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-      ObjectOutputStream oos = new ObjectOutputStream(baos);
-      oos.writeObject(pendingDeposits);
-      oos.flush();
-      return BaseEncoding.base64Url().omitPadding().encode(baos.toByteArray());
-    }
+    return encodeBase64(serializeCollection(pendingDeposits));
   }
 
   public static void main(String[] args) throws IOException, ClassNotFoundException {
@@ -699,27 +626,26 @@ public class RdePipeline implements Serializable {
   protected abstract static class TupleTags {
 
     protected static final TupleTag<KV<PendingDeposit, DepositFragment>> DOMAIN_FRAGMENTS =
-        new TupleTag<KV<PendingDeposit, DepositFragment>>() {};
+        new TupleTag<>() {};
 
     protected static final TupleTag<KV<String, PendingDeposit>> REFERENCED_CONTACTS =
-        new TupleTag<KV<String, PendingDeposit>>() {};
+        new TupleTag<>() {};
 
     protected static final TupleTag<KV<String, PendingDeposit>> REFERENCED_HOSTS =
-        new TupleTag<KV<String, PendingDeposit>>() {};
+        new TupleTag<>() {};
 
     protected static final TupleTag<KV<String, KV<String, CoGbkResult>>> SUPERORDINATE_DOMAINS =
-        new TupleTag<KV<String, KV<String, CoGbkResult>>>() {};
+        new TupleTag<>() {};
 
     protected static final TupleTag<KV<PendingDeposit, DepositFragment>> EXTERNAL_HOST_FRAGMENTS =
-        new TupleTag<KV<PendingDeposit, DepositFragment>>() {};
+        new TupleTag<>() {};
 
-    protected static final TupleTag<PendingDeposit> PENDING_DEPOSIT =
-        new TupleTag<PendingDeposit>() {};
+    protected static final TupleTag<PendingDeposit> PENDING_DEPOSIT = new TupleTag<>() {};
 
     protected static final TupleTag<KV<String, CoGbkResult>> HOST_TO_PENDING_DEPOSIT =
-        new TupleTag<KV<String, CoGbkResult>>() {};
+        new TupleTag<>() {};
 
-    protected static final TupleTag<Long> REVISION_ID = new TupleTag<Long>() {};
+    protected static final TupleTag<Long> REVISION_ID = new TupleTag<>() {};
   }
 
   @Singleton

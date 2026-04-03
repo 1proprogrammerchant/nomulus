@@ -15,17 +15,16 @@
 package google.registry.tools;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Predicates.isNull;
 import static com.google.common.base.Strings.isNullOrEmpty;
 import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
-import static google.registry.util.DomainNameUtils.canonicalizeHostname;
 import static google.registry.util.RegistrarUtils.normalizeRegistrarName;
 import static java.nio.charset.StandardCharsets.US_ASCII;
 import static org.joda.time.DateTimeZone.UTC;
 
 import com.beust.jcommander.Parameter;
+import com.google.common.base.Ascii;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import google.registry.flows.certs.CertificateChecker;
@@ -35,9 +34,10 @@ import google.registry.tools.params.KeyValueMapParameter.CurrencyUnitToStringMap
 import google.registry.tools.params.OptionalLongParameter;
 import google.registry.tools.params.OptionalPhoneNumberParameter;
 import google.registry.tools.params.OptionalStringParameter;
-import google.registry.tools.params.PathParameter;
+import google.registry.tools.params.PathParameter.InputFile;
 import google.registry.tools.params.StringListParameter;
 import google.registry.util.CidrAddressBlock;
+import jakarta.inject.Inject;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -45,9 +45,9 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import javax.annotation.Nullable;
-import javax.inject.Inject;
 import org.joda.money.CurrencyUnit;
 import org.joda.time.DateTime;
 
@@ -59,15 +59,11 @@ abstract class CreateOrUpdateRegistrarCommand extends MutatingCommand {
   @Parameter(description = "Client identifier of the registrar account", required = true)
   List<String> mainParameters;
 
-  @Parameter(
-      names = "--registrar_type",
-      description = "Type of the registrar")
+  @Parameter(names = "--registrar_type", description = "Type of the registrar")
   Registrar.Type registrarType;
 
   @Nullable
-  @Parameter(
-      names = "--registrar_state",
-      description = "Initial state of the registrar")
+  @Parameter(names = "--registrar_state", description = "Initial state of the registrar")
   Registrar.State registrarState;
 
   @Parameter(
@@ -132,7 +128,7 @@ abstract class CreateOrUpdateRegistrarCommand extends MutatingCommand {
   @Parameter(
       names = "--cert_file",
       description = "File containing client certificate (X.509 PEM)",
-      validateWith = PathParameter.InputFile.class)
+      validateWith = InputFile.class)
   Path clientCertificateFilename;
 
   @Parameter(
@@ -146,7 +142,7 @@ abstract class CreateOrUpdateRegistrarCommand extends MutatingCommand {
   @Parameter(
       names = "--failover_cert_file",
       description = "File containing failover client certificate (X.509 PEM)",
-      validateWith = PathParameter.InputFile.class)
+      validateWith = InputFile.class)
   Path failoverClientCertificateFilename;
 
   @Parameter(
@@ -292,48 +288,33 @@ abstract class CreateOrUpdateRegistrarCommand extends MutatingCommand {
       }
       if (!isNullOrEmpty(email)) {
         builder.setEmailAddress(email);
-      } else if (!isNullOrEmpty(
-          icannReferralEmail)) { // fall back to ICANN referral email if present
+      } else if (!isNullOrEmpty(icannReferralEmail) && oldRegistrar == null) {
+        // On creates, fall back to ICANN referral email (if present).
         builder.setEmailAddress(icannReferralEmail);
       }
-      if (url != null) {
-        builder.setUrl(url.orElse(null));
-      }
-      if (phone != null) {
-        builder.setPhoneNumber(phone.orElse(null));
-      }
-      if (fax != null) {
-        builder.setFaxNumber(fax.orElse(null));
-      }
-      if (registrarType != null) {
-        builder.setType(registrarType);
-      }
-      if (registrarState != null) {
-        builder.setState(registrarState);
-      }
-      if (driveFolderId != null) {
-        builder.setDriveFolderId(driveFolderId.orElse(null));
-      }
+      Optional.ofNullable(url).ifPresent(u -> builder.setUrl(u.orElse(null)));
+      Optional.ofNullable(phone).ifPresent(p -> builder.setPhoneNumber(p.orElse(null)));
+      Optional.ofNullable(fax).ifPresent(f -> builder.setFaxNumber(f.orElse(null)));
+      Optional.ofNullable(registrarType).ifPresent(builder::setType);
+      Optional.ofNullable(registrarState).ifPresent(builder::setState);
+      Optional.ofNullable(driveFolderId).ifPresent(d -> builder.setDriveFolderId(d.orElse(null)));
+
       if (!allowedTlds.isEmpty() || !addAllowedTlds.isEmpty()) {
         checkModifyAllowedTlds(oldRegistrar);
       }
       if (!allowedTlds.isEmpty()) {
         checkArgument(
             addAllowedTlds.isEmpty(), "Can't specify both --allowedTlds and --addAllowedTlds");
-        ImmutableSet.Builder<String> allowedTldsBuilder = new ImmutableSet.Builder<>();
-        for (String allowedTld : allowedTlds) {
-          allowedTldsBuilder.add(canonicalizeHostname(allowedTld));
-        }
-        builder.setAllowedTlds(allowedTldsBuilder.build());
+        builder.setAllowedTlds(
+            allowedTlds.stream().map(Ascii::toLowerCase).collect(toImmutableSet()));
       }
       if (!addAllowedTlds.isEmpty()) {
         ImmutableSet.Builder<String> allowedTldsBuilder = new ImmutableSet.Builder<>();
         if (oldRegistrar != null) {
           allowedTldsBuilder.addAll(oldRegistrar.getAllowedTlds());
         }
-        for (String allowedTld : addAllowedTlds) {
-          allowedTldsBuilder.add(canonicalizeHostname(allowedTld));
-        }
+        allowedTldsBuilder.addAll(
+            addAllowedTlds.stream().map(Ascii::toLowerCase).collect(toImmutableSet()));
         builder.setAllowedTlds(allowedTldsBuilder.build());
       }
       if (ipAllowList != null) {
@@ -341,7 +322,7 @@ abstract class CreateOrUpdateRegistrarCommand extends MutatingCommand {
             ipAllowList.stream().map(CidrAddressBlock::create).collect(toImmutableList()));
       }
       if (clientCertificateFilename != null) {
-        String asciiCert = new String(Files.readAllBytes(clientCertificateFilename), US_ASCII);
+        String asciiCert = Files.readString(clientCertificateFilename, US_ASCII);
         // An empty certificate file is allowed in order to provide a functionality for removing an
         // existing certificate without providing a replacement. An uploaded empty certificate file
         // will prevent the registrar from being able to establish EPP connections.
@@ -364,16 +345,13 @@ abstract class CreateOrUpdateRegistrarCommand extends MutatingCommand {
       }
 
       if (failoverClientCertificateFilename != null) {
-        String asciiCert =
-            new String(Files.readAllBytes(failoverClientCertificateFilename), US_ASCII);
+        String asciiCert = Files.readString(failoverClientCertificateFilename, US_ASCII);
         if (!asciiCert.equals("")) {
           certificateChecker.validateCertificate(asciiCert);
         }
         builder.setFailoverClientCertificate(asciiCert, now);
       }
-      if (ianaId != null) {
-        builder.setIanaIdentifier(ianaId.orElse(null));
-      }
+      Optional.ofNullable(ianaId).ifPresent(i -> builder.setIanaIdentifier(i.orElse(null)));
       Optional.ofNullable(poNumber).ifPresent(builder::setPoNumber);
       if (billingAccountMap != null) {
         LinkedHashMap<CurrencyUnit, String> newBillingAccountMap = new LinkedHashMap<>();
@@ -387,8 +365,8 @@ abstract class CreateOrUpdateRegistrarCommand extends MutatingCommand {
       }
       List<Object> streetAddressFields = Arrays.asList(street, city, state, zip, countryCode);
       checkArgument(
-          streetAddressFields.stream().anyMatch(isNull())
-              == streetAddressFields.stream().allMatch(isNull()),
+          streetAddressFields.stream().anyMatch(Objects::isNull)
+              == streetAddressFields.stream().allMatch(Objects::isNull),
           "Must specify all fields of address");
       if (street != null) {
         // We always set the localized address for now. That should be safe to do since it supports
@@ -422,7 +400,10 @@ abstract class CreateOrUpdateRegistrarCommand extends MutatingCommand {
       if (registrarName != null && !registrarName.equals(oldRegistrarName)) {
         String normalizedName = normalizeRegistrarName(registrarName);
         for (Registrar registrar : Registrar.loadAll()) {
-          if (registrar.getRegistrarName() != null) {
+          // Only check against other registrars (i.e. not the existing version of this one), and
+          // which also have a display name set.
+          if (!registrar.getRegistrarId().equals(clientId)
+              && registrar.getRegistrarName() != null) {
             checkArgument(
                 !normalizedName.equals(normalizeRegistrarName(registrar.getRegistrarName())),
                 "The registrar name %s normalizes identically to existing registrar name %s",

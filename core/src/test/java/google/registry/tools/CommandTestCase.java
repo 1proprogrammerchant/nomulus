@@ -94,7 +94,8 @@ public abstract class CommandTestCase<C extends Command> {
     System.setErr(oldStderr);
   }
 
-  void runCommandInEnvironment(RegistryToolEnvironment env, String... args) throws Exception {
+  protected void runCommandInEnvironment(RegistryToolEnvironment env, String... args)
+      throws Exception {
     env.setup(systemPropertyExtension);
     try {
       JCommander jcommander = new JCommander(command);
@@ -104,6 +105,12 @@ public abstract class CommandTestCase<C extends Command> {
     } finally {
       // Reset back to UNITTEST environment.
       RegistryToolEnvironment.UNITTEST.setup(systemPropertyExtension);
+      // Reset the "force" field because it gets flipped every time the "--force" flag is present.
+      // If we force-run the same command multiple times in the same test method, the second run
+      // will flip the boolean again to false and not run as forced.
+      if (command instanceof ConfirmingCommand cc) {
+        cc.force = false;
+      }
     }
   }
 
@@ -198,7 +205,7 @@ public abstract class CommandTestCase<C extends Command> {
   }
 
   void assertInStderr(String... expected) {
-    String stderror = new String(stderr.toByteArray(), UTF_8);
+    String stderror = getStderrAsString();
     for (String line : expected) {
       assertThat(stderror).contains(line);
     }

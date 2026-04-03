@@ -15,6 +15,8 @@
 package google.registry.batch;
 
 import static com.google.common.truth.Truth.assertThat;
+import static google.registry.request.Action.Method.GET;
+import static google.registry.request.Action.Method.POST;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -29,7 +31,9 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMultimap;
 import com.google.common.collect.LinkedListMultimap;
 import google.registry.batch.CloudTasksUtils.SerializableCloudTasksClient;
+import google.registry.request.Action;
 import google.registry.request.Action.Service;
+import google.registry.request.auth.Auth;
 import google.registry.testing.CloudTasksHelper.FakeGoogleCredentialsBundle;
 import google.registry.testing.FakeClock;
 import google.registry.testing.FakeSleeper;
@@ -68,24 +72,13 @@ public class CloudTasksUtilsTest {
   }
 
   @Test
-  void testFailure_createGetTasks_withNegativeDelay() {
+  void testFailure_createTasks_withNegativeDelay() {
     IllegalArgumentException thrown =
         assertThrows(
             IllegalArgumentException.class,
             () ->
-                cloudTasksUtils.createGetTaskWithDelay(
-                    "/the/path", Service.BACKEND, params, Duration.standardMinutes(-10)));
-    assertThat(thrown).hasMessageThat().isEqualTo("Negative duration is not supported.");
-  }
-
-  @Test
-  void testFailure_createPostTasks_withNegativeDelay() {
-    IllegalArgumentException thrown =
-        assertThrows(
-            IllegalArgumentException.class,
-            () ->
-                cloudTasksUtils.createGetTaskWithDelay(
-                    "/the/path", Service.BACKEND, params, Duration.standardMinutes(-10)));
+                cloudTasksUtils.createTaskWithDelay(
+                    TheAction.class, GET, params, Duration.standardMinutes(-10)));
     assertThat(thrown).hasMessageThat().isEqualTo("Negative duration is not supported.");
   }
 
@@ -93,26 +86,26 @@ public class CloudTasksUtilsTest {
   void testFailure_illegalPath() {
     assertThrows(
         IllegalArgumentException.class,
-        () -> cloudTasksUtils.createPostTask("the/path", Service.BACKEND, params));
+        () -> cloudTasksUtils.createTask("the/path", GET, Service.BACKEND, params));
     assertThrows(
         IllegalArgumentException.class,
-        () -> cloudTasksUtils.createPostTask(null, Service.BACKEND, params));
+        () -> cloudTasksUtils.createTask(null, GET, Service.BACKEND, params));
     assertThrows(
         IllegalArgumentException.class,
-        () -> cloudTasksUtils.createPostTask("", Service.BACKEND, params));
+        () -> cloudTasksUtils.createTask("", GET, Service.BACKEND, params));
   }
 
   @Test
   void testSuccess_enqueueTask() {
-    Task task = cloudTasksUtils.createGetTask("/the/path", Service.BACKEND, params);
+    Task task = cloudTasksUtils.createTask(TheAction.class, GET, params);
     cloudTasksUtils.enqueue("test-queue", task);
     verify(mockClient).enqueue("project", "location", "test-queue", task);
   }
 
   @Test
   void testSuccess_enqueueTasks_varargs() {
-    Task task1 = cloudTasksUtils.createGetTask("/the/path", Service.BACKEND, params);
-    Task task2 = cloudTasksUtils.createGetTask("/other/path", Service.TOOLS, params);
+    Task task1 = cloudTasksUtils.createTask(TheAction.class, GET, params);
+    Task task2 = cloudTasksUtils.createTask(OtherAction.class, GET, params);
     cloudTasksUtils.enqueue("test-queue", task1, task2);
     verify(mockClient).enqueue("project", "location", "test-queue", task1);
     verify(mockClient).enqueue("project", "location", "test-queue", task2);
@@ -120,8 +113,8 @@ public class CloudTasksUtilsTest {
 
   @Test
   void testSuccess_enqueueTasks_iterable() {
-    Task task1 = cloudTasksUtils.createGetTask("/the/path", Service.BACKEND, params);
-    Task task2 = cloudTasksUtils.createGetTask("/other/path", Service.TOOLS, params);
+    Task task1 = cloudTasksUtils.createTask(TheAction.class, GET, params);
+    Task task2 = cloudTasksUtils.createTask(OtherAction.class, GET, params);
     cloudTasksUtils.enqueue("test-queue", ImmutableList.of(task1, task2));
     verify(mockClient).enqueue("project", "location", "test-queue", task1);
     verify(mockClient).enqueue("project", "location", "test-queue", task2);
@@ -129,19 +122,43 @@ public class CloudTasksUtilsTest {
 
   @Test
   void testSuccess_createGetTasks() {
-    Task task = cloudTasksUtils.createGetTask("/the/path", Service.BACKEND, params);
+    Task task = cloudTasksUtils.createTask(TheAction.class, GET, params);
     assertThat(task.getHttpRequest().getHttpMethod()).isEqualTo(HttpMethod.GET);
     assertThat(task.getHttpRequest().getUrl())
-        .isEqualTo("https://backend.example.com/the/path?key1=val1&key2=val2&key1=val3");
+        .isEqualTo("https://backend.registry.test/the/path?key1=val1&key2=val2&key1=val3");
     verifyOidcToken(task);
     assertThat(task.getScheduleTime().getSeconds()).isEqualTo(0);
   }
 
   @Test
+  void testSuccess_createTasks_WithPathAndService() {
+    Task task = cloudTasksUtils.createTask("/the/path", GET, Service.BACKEND, params);
+    assertThat(task.getHttpRequest().getHttpMethod()).isEqualTo(HttpMethod.GET);
+    assertThat(task.getHttpRequest().getUrl())
+        .isEqualTo("https://backend.registry.test/the/path?key1=val1&key2=val2&key1=val3");
+    verifyOidcToken(task);
+    assertThat(task.getScheduleTime().getSeconds()).isEqualTo(0);
+  }
+
+  @Test
+  void testFailure_createTasks_notAnAction() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> cloudTasksUtils.createTask(NotAnAction.class, GET, params));
+  }
+
+  @Test
+  void testFailure_methodNotAllowed() {
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> cloudTasksUtils.createTask(OtherAction.class, POST, params));
+  }
+
+  @Test
   void testSuccess_createPostTasks() {
-    Task task = cloudTasksUtils.createPostTask("/the/path", Service.BACKEND, params);
+    Task task = cloudTasksUtils.createTask(TheAction.class, POST, params);
     assertThat(task.getHttpRequest().getHttpMethod()).isEqualTo(HttpMethod.POST);
-    assertThat(task.getHttpRequest().getUrl()).isEqualTo("https://backend.example.com/the/path");
+    assertThat(task.getHttpRequest().getUrl()).isEqualTo("https://backend.registry.test/the/path");
     assertThat(task.getHttpRequest().getHeadersMap().get("Content-Type"))
         .isEqualTo("application/x-www-form-urlencoded");
     assertThat(task.getHttpRequest().getBody().toString(StandardCharsets.UTF_8))
@@ -152,18 +169,18 @@ public class CloudTasksUtilsTest {
 
   @Test
   void testSuccess_createGetTasks_withNullParams() {
-    Task task = cloudTasksUtils.createGetTask("/the/path", Service.BACKEND, null);
+    Task task = cloudTasksUtils.createTask(TheAction.class, GET, null);
     assertThat(task.getHttpRequest().getHttpMethod()).isEqualTo(HttpMethod.GET);
-    assertThat(task.getHttpRequest().getUrl()).isEqualTo("https://backend.example.com/the/path");
+    assertThat(task.getHttpRequest().getUrl()).isEqualTo("https://backend.registry.test/the/path");
     verifyOidcToken(task);
     assertThat(task.getScheduleTime().getSeconds()).isEqualTo(0);
   }
 
   @Test
   void testSuccess_createPostTasks_withNullParams() {
-    Task task = cloudTasksUtils.createPostTask("/the/path", Service.BACKEND, null);
+    Task task = cloudTasksUtils.createTask(TheAction.class, POST, null);
     assertThat(task.getHttpRequest().getHttpMethod()).isEqualTo(HttpMethod.POST);
-    assertThat(task.getHttpRequest().getUrl()).isEqualTo("https://backend.example.com/the/path");
+    assertThat(task.getHttpRequest().getUrl()).isEqualTo("https://backend.registry.test/the/path");
     assertThat(task.getHttpRequest().getBody().toString(StandardCharsets.UTF_8)).isEmpty();
     verifyOidcToken(task);
     assertThat(task.getScheduleTime().getSeconds()).isEqualTo(0);
@@ -171,19 +188,18 @@ public class CloudTasksUtilsTest {
 
   @Test
   void testSuccess_createGetTasks_withEmptyParams() {
-    Task task = cloudTasksUtils.createGetTask("/the/path", Service.BACKEND, ImmutableMultimap.of());
+    Task task = cloudTasksUtils.createTask(TheAction.class, GET, ImmutableMultimap.of());
     assertThat(task.getHttpRequest().getHttpMethod()).isEqualTo(HttpMethod.GET);
-    assertThat(task.getHttpRequest().getUrl()).isEqualTo("https://backend.example.com/the/path");
+    assertThat(task.getHttpRequest().getUrl()).isEqualTo("https://backend.registry.test/the/path");
     verifyOidcToken(task);
     assertThat(task.getScheduleTime().getSeconds()).isEqualTo(0);
   }
 
   @Test
   void testSuccess_createPostTasks_withEmptyParams() {
-    Task task =
-        cloudTasksUtils.createPostTask("/the/path", Service.BACKEND, ImmutableMultimap.of());
+    Task task = cloudTasksUtils.createTask(TheAction.class, POST, ImmutableMultimap.of());
     assertThat(task.getHttpRequest().getHttpMethod()).isEqualTo(HttpMethod.POST);
-    assertThat(task.getHttpRequest().getUrl()).isEqualTo("https://backend.example.com/the/path");
+    assertThat(task.getHttpRequest().getUrl()).isEqualTo("https://backend.registry.test/the/path");
     assertThat(task.getHttpRequest().getBody().toString(StandardCharsets.UTF_8)).isEmpty();
     verifyOidcToken(task);
     assertThat(task.getScheduleTime().getSeconds()).isEqualTo(0);
@@ -191,15 +207,15 @@ public class CloudTasksUtilsTest {
 
   @SuppressWarnings("ProtoTimestampGetSecondsGetNano")
   @Test
-  void testSuccess_createGetTasks_withJitterSeconds() {
+  void testSuccess_createTasks_withJitterSeconds() {
     Task task =
-        cloudTasksUtils.createGetTaskWithJitter(
-            "/the/path", Service.BACKEND, params, Optional.of(100));
+        cloudTasksUtils.createTaskWithJitter(TheAction.class, GET, params, Optional.of(100));
     assertThat(task.getHttpRequest().getHttpMethod()).isEqualTo(HttpMethod.GET);
     assertThat(task.getHttpRequest().getUrl())
-        .isEqualTo("https://backend.example.com/the/path?key1=val1&key2=val2&key1=val3");
+        .isEqualTo("https://backend.registry.test/the/path?key1=val1&key2=val2&key1=val3");
     verifyOidcToken(task);
 
+    assertThat(task.getScheduleTime().getSeconds()).isNotEqualTo(0);
     Instant scheduleTime = Instant.ofEpochSecond(task.getScheduleTime().getSeconds());
     Instant lowerBoundTime = Instant.ofEpochMilli(clock.nowUtc().getMillis());
     Instant upperBound = Instant.ofEpochMilli(clock.nowUtc().plusSeconds(100).getMillis());
@@ -208,137 +224,76 @@ public class CloudTasksUtilsTest {
     assertThat(upperBound.isBefore(scheduleTime)).isFalse();
   }
 
-  @SuppressWarnings("ProtoTimestampGetSecondsGetNano")
   @Test
-  void testSuccess_createPostTasks_withJitterSeconds() {
+  void testSuccess_createTasks_withEmptyJitterSeconds() {
     Task task =
-        cloudTasksUtils.createPostTaskWithJitter(
-            "/the/path", Service.BACKEND, params, Optional.of(1));
-    assertThat(task.getHttpRequest().getHttpMethod()).isEqualTo(HttpMethod.POST);
-    assertThat(task.getHttpRequest().getUrl()).isEqualTo("https://backend.example.com/the/path");
-    assertThat(task.getHttpRequest().getHeadersMap().get("Content-Type"))
-        .isEqualTo("application/x-www-form-urlencoded");
-    assertThat(task.getHttpRequest().getBody().toString(StandardCharsets.UTF_8))
-        .isEqualTo("key1=val1&key2=val2&key1=val3");
-    verifyOidcToken(task);
-    assertThat(task.getScheduleTime().getSeconds()).isNotEqualTo(0);
-
-    Instant scheduleTime = Instant.ofEpochSecond(task.getScheduleTime().getSeconds());
-    Instant lowerBoundTime = Instant.ofEpochMilli(clock.nowUtc().getMillis());
-    Instant upperBound = Instant.ofEpochMilli(clock.nowUtc().plusSeconds(1).getMillis());
-
-    assertThat(scheduleTime.isBefore(lowerBoundTime)).isFalse();
-    assertThat(upperBound.isBefore(scheduleTime)).isFalse();
-  }
-
-  @Test
-  void testSuccess_createPostTasks_withEmptyJitterSeconds() {
-    Task task =
-        cloudTasksUtils.createPostTaskWithJitter(
-            "/the/path", Service.BACKEND, params, Optional.empty());
-    assertThat(task.getHttpRequest().getHttpMethod()).isEqualTo(HttpMethod.POST);
-    assertThat(task.getHttpRequest().getUrl()).isEqualTo("https://backend.example.com/the/path");
-    assertThat(task.getHttpRequest().getHeadersMap().get("Content-Type"))
-        .isEqualTo("application/x-www-form-urlencoded");
-    assertThat(task.getHttpRequest().getBody().toString(StandardCharsets.UTF_8))
-        .isEqualTo("key1=val1&key2=val2&key1=val3");
-    verifyOidcToken(task);
-    assertThat(task.getScheduleTime().getSeconds()).isEqualTo(0);
-  }
-
-  @Test
-  void testSuccess_createGetTasks_withEmptyJitterSeconds() {
-    Task task =
-        cloudTasksUtils.createGetTaskWithJitter(
-            "/the/path", Service.BACKEND, params, Optional.empty());
+        cloudTasksUtils.createTaskWithJitter(TheAction.class, GET, params, Optional.empty());
     assertThat(task.getHttpRequest().getHttpMethod()).isEqualTo(HttpMethod.GET);
     assertThat(task.getHttpRequest().getUrl())
-        .isEqualTo("https://backend.example.com/the/path?key1=val1&key2=val2&key1=val3");
+        .isEqualTo("https://backend.registry.test/the/path?key1=val1&key2=val2&key1=val3");
     verifyOidcToken(task);
     assertThat(task.getScheduleTime().getSeconds()).isEqualTo(0);
   }
 
   @Test
-  void testSuccess_createPostTasks_withZeroJitterSeconds() {
-    Task task =
-        cloudTasksUtils.createPostTaskWithJitter(
-            "/the/path", Service.BACKEND, params, Optional.of(0));
-    assertThat(task.getHttpRequest().getHttpMethod()).isEqualTo(HttpMethod.POST);
-    assertThat(task.getHttpRequest().getUrl()).isEqualTo("https://backend.example.com/the/path");
-    assertThat(task.getHttpRequest().getHeadersMap().get("Content-Type"))
-        .isEqualTo("application/x-www-form-urlencoded");
-    assertThat(task.getHttpRequest().getBody().toString(StandardCharsets.UTF_8))
-        .isEqualTo("key1=val1&key2=val2&key1=val3");
-    verifyOidcToken(task);
-    assertThat(task.getScheduleTime().getSeconds()).isEqualTo(0);
-  }
-
-  @Test
-  void testSuccess_createGetTasks_withZeroJitterSeconds() {
-    Task task =
-        cloudTasksUtils.createGetTaskWithJitter(
-            "/the/path", Service.BACKEND, params, Optional.of(0));
+  void testSuccess_createTasks_withZeroJitterSeconds() {
+    Task task = cloudTasksUtils.createTaskWithJitter(TheAction.class, GET, params, Optional.of(0));
     assertThat(task.getHttpRequest().getHttpMethod()).isEqualTo(HttpMethod.GET);
     assertThat(task.getHttpRequest().getUrl())
-        .isEqualTo("https://backend.example.com/the/path?key1=val1&key2=val2&key1=val3");
+        .isEqualTo("https://backend.registry.test/the/path?key1=val1&key2=val2&key1=val3");
     verifyOidcToken(task);
     assertThat(task.getScheduleTime().getSeconds()).isEqualTo(0);
   }
 
   @Test
-  void testSuccess_createGetTasks_withDelay() {
+  void testSuccess_createTasks_withDelay() {
     Task task =
-        cloudTasksUtils.createGetTaskWithDelay(
-            "/the/path", Service.BACKEND, params, Duration.standardMinutes(10));
+        cloudTasksUtils.createTaskWithDelay(
+            TheAction.class, GET, params, Duration.standardMinutes(10));
     assertThat(task.getHttpRequest().getHttpMethod()).isEqualTo(HttpMethod.GET);
     assertThat(task.getHttpRequest().getUrl())
-        .isEqualTo("https://backend.example.com/the/path?key1=val1&key2=val2&key1=val3");
+        .isEqualTo("https://backend.registry.test/the/path?key1=val1&key2=val2&key1=val3");
     verifyOidcToken(task);
     assertThat(Instant.ofEpochSecond(task.getScheduleTime().getSeconds()))
         .isEqualTo(Instant.ofEpochMilli(clock.nowUtc().plusMinutes(10).getMillis()));
   }
 
   @Test
-  void testSuccess_createPostTasks_withDelay() {
-    Task task =
-        cloudTasksUtils.createPostTaskWithDelay(
-            "/the/path", Service.BACKEND, params, Duration.standardMinutes(10));
-    assertThat(task.getHttpRequest().getHttpMethod()).isEqualTo(HttpMethod.POST);
-    assertThat(task.getHttpRequest().getUrl()).isEqualTo("https://backend.example.com/the/path");
-    assertThat(task.getHttpRequest().getHeadersMap().get("Content-Type"))
-        .isEqualTo("application/x-www-form-urlencoded");
-    assertThat(task.getHttpRequest().getBody().toString(StandardCharsets.UTF_8))
-        .isEqualTo("key1=val1&key2=val2&key1=val3");
-    verifyOidcToken(task);
-    assertThat(task.getScheduleTime().getSeconds()).isNotEqualTo(0);
-    assertThat(Instant.ofEpochSecond(task.getScheduleTime().getSeconds()))
-        .isEqualTo(Instant.ofEpochMilli(clock.nowUtc().plusMinutes(10).getMillis()));
-  }
-
-  @Test
-  void testSuccess_createPostTasks_withZeroDelay() {
-    Task task =
-        cloudTasksUtils.createPostTaskWithDelay(
-            "/the/path", Service.BACKEND, params, Duration.ZERO);
-    assertThat(task.getHttpRequest().getHttpMethod()).isEqualTo(HttpMethod.POST);
-    assertThat(task.getHttpRequest().getUrl()).isEqualTo("https://backend.example.com/the/path");
-    assertThat(task.getHttpRequest().getHeadersMap().get("Content-Type"))
-        .isEqualTo("application/x-www-form-urlencoded");
-    assertThat(task.getHttpRequest().getBody().toString(StandardCharsets.UTF_8))
-        .isEqualTo("key1=val1&key2=val2&key1=val3");
-    verifyOidcToken(task);
-    assertThat(task.getScheduleTime().getSeconds()).isEqualTo(0);
-  }
-
-  @Test
-  void testSuccess_createGetTasks_withZeroDelay() {
-    Task task =
-        cloudTasksUtils.createGetTaskWithDelay("/the/path", Service.BACKEND, params, Duration.ZERO);
+  void testSuccess_createTasks_withZeroDelay() {
+    Task task = cloudTasksUtils.createTaskWithDelay(TheAction.class, GET, params, Duration.ZERO);
     assertThat(task.getHttpRequest().getHttpMethod()).isEqualTo(HttpMethod.GET);
     assertThat(task.getHttpRequest().getUrl())
-        .isEqualTo("https://backend.example.com/the/path?key1=val1&key2=val2&key1=val3");
+        .isEqualTo("https://backend.registry.test/the/path?key1=val1&key2=val2&key1=val3");
     verifyOidcToken(task);
     assertThat(task.getScheduleTime().getSeconds()).isEqualTo(0);
+  }
+
+  @Action(
+      service = Service.BACKEND,
+      path = "/the/path",
+      method = {GET, POST},
+      auth = Auth.AUTH_ADMIN)
+  private static class TheAction implements Runnable {
+
+    @Override
+    public void run() {}
+  }
+
+  @Action(
+      service = Service.BACKEND,
+      path = "/other/path",
+      method = {GET},
+      auth = Auth.AUTH_ADMIN)
+  private static class OtherAction implements Runnable {
+
+    @Override
+    public void run() {}
+  }
+
+  private static class NotAnAction implements Runnable {
+
+    @Override
+    public void run() {}
   }
 
   private static void verifyOidcToken(Task task) {

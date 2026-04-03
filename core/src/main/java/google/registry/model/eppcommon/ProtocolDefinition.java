@@ -16,23 +16,32 @@ package google.registry.model.eppcommon;
 
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Maps.uniqueIndex;
+import static google.registry.model.common.FeatureFlag.FeatureName.FEE_EXTENSION_1_DOT_0_IN_PROD;
+import static google.registry.persistence.transaction.TransactionManagerFactory.tm;
 
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.VerifyException;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import google.registry.model.common.FeatureFlag;
 import google.registry.model.domain.fee06.FeeCheckCommandExtensionV06;
 import google.registry.model.domain.fee06.FeeCheckResponseExtensionV06;
 import google.registry.model.domain.fee11.FeeCheckCommandExtensionV11;
 import google.registry.model.domain.fee11.FeeCheckResponseExtensionV11;
 import google.registry.model.domain.fee12.FeeCheckCommandExtensionV12;
 import google.registry.model.domain.fee12.FeeCheckResponseExtensionV12;
+import google.registry.model.domain.feestdv1.FeeCheckCommandExtensionStdV1;
+import google.registry.model.domain.feestdv1.FeeCheckResponseExtensionStdV1;
 import google.registry.model.domain.launch.LaunchCreateExtension;
 import google.registry.model.domain.metadata.MetadataExtension;
 import google.registry.model.domain.rgp.RgpUpdateExtension;
 import google.registry.model.domain.secdns.SecDnsCreateExtension;
 import google.registry.model.eppinput.EppInput.CommandExtension;
 import google.registry.model.eppoutput.EppResponse.ResponseExtension;
+import google.registry.util.NonFinalForTesting;
+import google.registry.util.RegistryEnvironment;
+import jakarta.xml.bind.annotation.XmlSchema;
 import java.util.EnumSet;
-import javax.xml.bind.annotation.XmlSchema;
 
 /** Constants that define the EPP protocol version we support. */
 public class ProtocolDefinition {
@@ -41,34 +50,59 @@ public class ProtocolDefinition {
   public static final String LANGUAGE = "en";
 
   public static final ImmutableSet<String> SUPPORTED_OBJECT_SERVICES =
-      ImmutableSet.of(
-          "urn:ietf:params:xml:ns:host-1.0",
-          "urn:ietf:params:xml:ns:domain-1.0",
-          "urn:ietf:params:xml:ns:contact-1.0");
+      ImmutableSet.of("urn:ietf:params:xml:ns:host-1.0", "urn:ietf:params:xml:ns:domain-1.0");
 
-  /** Enums repesenting valid service extensions that are recognized by the server. */
+  public static final ImmutableSet<String> SUPPORTED_OBJECT_SERVICES_WITH_CONTACT =
+      new ImmutableSet.Builder<String>()
+          .addAll(SUPPORTED_OBJECT_SERVICES)
+          .add("urn:ietf:params:xml:ns:contact-1.0")
+          .build();
+
+  /** Enum representing which environments should have which service extensions enabled. */
+  private enum ServiceExtensionVisibility {
+    ALL,
+    FEE_1_DOT_0_EXTENSION_VISIBILITY,
+    NONE
+  }
+
+  /** Enum representing valid service extensions that are recognized by the server. */
   public enum ServiceExtension {
-    LAUNCH_EXTENSION_1_0(LaunchCreateExtension.class, null, true),
-    REDEMPTION_GRACE_PERIOD_1_0(RgpUpdateExtension.class, null, true),
-    SECURE_DNS_1_1(SecDnsCreateExtension.class, null, true),
-    FEE_0_6(FeeCheckCommandExtensionV06.class, FeeCheckResponseExtensionV06.class, true),
-    FEE_0_11(FeeCheckCommandExtensionV11.class, FeeCheckResponseExtensionV11.class, true),
-    FEE_0_12(FeeCheckCommandExtensionV12.class, FeeCheckResponseExtensionV12.class, true),
-    METADATA_1_0(MetadataExtension.class, null, false);
+    LAUNCH_EXTENSION_1_0(LaunchCreateExtension.class, null, ServiceExtensionVisibility.ALL),
+    REDEMPTION_GRACE_PERIOD_1_0(RgpUpdateExtension.class, null, ServiceExtensionVisibility.ALL),
+    SECURE_DNS_1_1(SecDnsCreateExtension.class, null, ServiceExtensionVisibility.ALL),
+    FEE_0_6(
+        FeeCheckCommandExtensionV06.class,
+        FeeCheckResponseExtensionV06.class,
+        ServiceExtensionVisibility.ALL),
+    FEE_0_11(
+        FeeCheckCommandExtensionV11.class,
+        FeeCheckResponseExtensionV11.class,
+        ServiceExtensionVisibility.ALL),
+    FEE_0_12(
+        FeeCheckCommandExtensionV12.class,
+        FeeCheckResponseExtensionV12.class,
+        ServiceExtensionVisibility.ALL),
+    FEE_1_00(
+        FeeCheckCommandExtensionStdV1.class,
+        FeeCheckResponseExtensionStdV1.class,
+        ServiceExtensionVisibility.FEE_1_DOT_0_EXTENSION_VISIBILITY),
+    METADATA_1_0(MetadataExtension.class, null, ServiceExtensionVisibility.NONE);
 
     private final Class<? extends CommandExtension> commandExtensionClass;
     private final Class<? extends ResponseExtension> responseExtensionClass;
     private final String uri;
-    private final boolean visible;
+    private final String xmlTag;
+    private final ServiceExtensionVisibility visibility;
 
     ServiceExtension(
         Class<? extends CommandExtension> commandExtensionClass,
         Class<? extends ResponseExtension> responseExtensionClass,
-        boolean visible) {
+        ServiceExtensionVisibility visibility) {
       this.commandExtensionClass = commandExtensionClass;
       this.responseExtensionClass = responseExtensionClass;
       this.uri = getCommandExtensionUri(commandExtensionClass);
-      this.visible = visible;
+      this.xmlTag = getCommandExtensionXmlTag(commandExtensionClass);
+      this.visibility = visibility;
     }
 
     public Class<? extends CommandExtension> getCommandExtensionClass() {
@@ -83,13 +117,35 @@ public class ProtocolDefinition {
       return uri;
     }
 
-    public boolean getVisible() {
-      return visible;
+    public String getXmlTag() {
+      return xmlTag;
     }
 
     /** Returns the namespace URI of the command extension class. */
     public static String getCommandExtensionUri(Class<? extends CommandExtension> clazz) {
       return clazz.getPackage().getAnnotation(XmlSchema.class).namespace();
+    }
+
+    /** Returns the XML tag for this extension in the response message. */
+    public static String getCommandExtensionXmlTag(Class<? extends CommandExtension> clazz) {
+      var xmlSchema = clazz.getPackage().getAnnotation(XmlSchema.class);
+      var xmlns = xmlSchema.xmlns();
+      if (xmlns == null || xmlns.length != 1) {
+        throw new VerifyException(
+            String.format(
+                "Expecting exactly one NS declaration in %s", clazz.getPackage().getName()));
+      }
+      return xmlns[0].prefix();
+    }
+
+    public boolean isVisible() {
+      return switch (visibility) {
+        case ALL -> true;
+        case FEE_1_DOT_0_EXTENSION_VISIBILITY ->
+            !RegistryEnvironment.get().equals(RegistryEnvironment.PRODUCTION)
+                || tm().transact(() -> FeatureFlag.isActiveNow(FEE_EXTENSION_1_DOT_0_IN_PROD));
+        case NONE -> false;
+      };
     }
   }
 
@@ -107,15 +163,25 @@ public class ProtocolDefinition {
   }
 
   /** A set of all the visible extension URIs. */
-  private static final ImmutableSet<String> visibleServiceExtensionUris =
-      EnumSet.allOf(ServiceExtension.class)
-          .stream()
-          .filter(ServiceExtension::getVisible)
-          .map(ServiceExtension::getUri)
-          .collect(toImmutableSet());
+  // TODO(gbrodman): make this final when we can actually remove the old fee extensions and aren't
+  // relying on switching by environment
+  @NonFinalForTesting private static ImmutableSet<String> visibleServiceExtensionUris;
+
+  static {
+    reloadServiceExtensionUris();
+  }
 
   /** Return the set of all visible service extension URIs. */
   public static ImmutableSet<String> getVisibleServiceExtensionUris() {
     return visibleServiceExtensionUris;
+  }
+
+  @VisibleForTesting
+  public static void reloadServiceExtensionUris() {
+    visibleServiceExtensionUris =
+        EnumSet.allOf(ServiceExtension.class).stream()
+            .filter(ServiceExtension::isVisible)
+            .map(ServiceExtension::getUri)
+            .collect(toImmutableSet());
   }
 }

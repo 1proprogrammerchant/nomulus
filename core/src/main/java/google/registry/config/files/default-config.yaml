@@ -1,5 +1,5 @@
 # This is the default configuration file for Nomulus. Do not make changes to it
-# unless you are writing new features that requires you to. To customize an
+# unless you are writing new features that require you to. To customize an
 # individual deployment or environment, create a nomulus-config.yaml file in the
 # WEB-INF/ directory overriding only the values you wish to change. You may need
 # to override some of these values to configure and enable some services used in
@@ -12,25 +12,23 @@ gcpProject:
   projectIdNumber: 123456789012
   # Location of the GCP project, note that us-central1 and europe-west1 are special in that
   # they are used without the trailing number in GCP commands and Google Cloud Console.
-  # See: https://cloud.google.com/appengine/docs/locations as an example
+  # See: https://docs.cloud.google.com/compute/docs/regions-zones as an example
   locationId: registry-location-id
 
   # whether to use local/test credentials when connecting to the servers
   isLocal: true
-  # URLs of the services for the project.
-  defaultServiceUrl: https://default.example.com
-  backendServiceUrl: https://backend.example.com
-  toolsServiceUrl: https://tools.example.com
-  pubapiServiceUrl: https://pubapi.example.com
+
+  # The base domain name of the registry service. Services are reachable at [service].baseDomain.
+  baseDomain: registry.test
 
 gSuite:
   # Publicly accessible domain name of the running G Suite instance.
   domainName: domain-registry.example
 
   # Display name and email address used on outgoing emails through G Suite.
-  # The email address must be valid and have permission in the GAE app to send
-  # emails. For more info see:
-  # https://cloud.google.com/appengine/docs/standard/java/mail/#who_can_send_mail
+  # The email address must be valid and the domain must be set up to send emails.
+  # For more info see
+  # https://docs.cloud.google.com/compute/docs/tutorials/sending-mail
   outgoingEmailDisplayName: Example Registry
   outgoingEmailAddress: noreply@project-id.appspotmail.com
   # TODO(b/279671974): reuse `outgoingEmailAddress` after migration
@@ -45,6 +43,11 @@ gSuite:
   # given "ADMIN" role on the registrar console.
   supportGroupEmailAddress: support@example.com
 
+  # Group containing the emails of console users. This group should be granted
+  # roles/iap.httpsResourceAccessor out-of-band. If this field is empty, each
+  # console user will be granted to the role individually when they are created.
+  consoleUserGroupEmailAddress:
+
 registryPolicy:
   # Repository identifier (ROID) suffix for contacts and hosts.
   contactAndHostRoidSuffix: ROID
@@ -56,20 +59,9 @@ registryPolicy:
   # See flows/custom/CustomLogicFactory.java
   customLogicFactoryClass: google.registry.flows.custom.CustomLogicFactory
 
-  # WHOIS command factory fully-qualified class name.
-  # See whois/WhoisCommandFactory.java
-  whoisCommandFactoryClass: google.registry.whois.WhoisCommandFactory
-
-  # Custom logic class for handling allocation tokens.
-  # See flows/domain/token/AllocationTokenCustomLogic.java
-  allocationTokenCustomLogicClass: google.registry.flows.domain.token.AllocationTokenCustomLogic
-
   # Custom logic class for handling DNS query count reporting for ICANN.
   # See reporting/icann/DnsCountQueryCoordinator.java
-  dnsCountQueryCoordinatorClass: google.registry.reporting.icann.BasicDnsCountQueryCoordinator
-
-  # Length of time after which contact transfers automatically conclude.
-  contactAutomaticTransferDays: 5
+  dnsCountQueryCoordinatorClass: google.registry.reporting.icann.DummyDnsCountQueryCoordinator
 
   # Server ID used in the 'svID' element of an EPP 'greeting'.
   greetingServerId: Nomulus Registry
@@ -108,25 +100,6 @@ registryPolicy:
     but not included in this list, including terms the registry chooses not
     to publish. This list is subject to change. The most up-to-date source
     is always the registry itself, by sending domain check EPP commands.
-
-  # Redaction text for email address in WHOIS
-  whoisRedactedEmailText: |
-    Please query the WHOIS server of the owning registrar identified in this
-    output for information on how to contact the Registrant, Admin, or Tech
-    contact of the queried domain name.
-
-  # Disclaimer at the top of WHOIS results.
-  whoisDisclaimer: |
-    WHOIS information is provided by the registry solely for query-based,
-    informational purposes. Any information provided is "as is" without any
-    guarantee of accuracy. You may not use such information to (a) allow,
-    enable, or otherwise support the transmission of mass unsolicited,
-    commercial advertising or solicitations; (b) enable high volume, automated,
-    electronic processes that access the registry's systems or any
-    ICANN-Accredited Registrar, except as reasonably necessary to register
-    domain names or modify existing registrations; or (c) engage in or support
-    unlawful behavior. We reserve the right to restrict or deny your access to
-    the WHOIS database, and may modify these terms at any time.
 
   # RDAP Terms of Service text displayed at the /rdap/help/tos endpoint.
   rdapTos: >
@@ -188,12 +161,26 @@ registryPolicy:
   # will be free.
   sunriseDomainCreateDiscount: 0.15
 
+  # List of registrars participating in tiered pricing promotions that require
+  # non-standard responses to EPP domain:check and domain:create commands.
+  # When a promotion is active, we will set an additional STANDARD PROMOTION
+  # fee check response on any domain checks that corresponds to the actual
+  # promotional price (the regular response will be the non-promotional price).
+  # In addition, we will return the non-promotional (i.e. incorrect) price on
+  # domain create requests.
+  tieredPricingPromotionRegistrarIds: []
+  # List of registrars for which we won't send poll message on standard domain
+  # deletions.
+  noPollMessageOnDeletionRegistrarIds: []
+
 hibernate:
-  # Make it possible to specify the isolation level for each transaction. If set
-  # to true, nested transactions will throw an exception. If set to false, a
-  # transaction with the isolation override specified will still execute at the
-  # default level (specified below).
-  perTransactionIsolation: false
+  # If set to false, calls to tm().transact() cannot be nested. If set to true,
+  # nested calls to tm().transact() are allowed, as long as they do not specify
+  # a transaction isolation level override. These nested transactions should
+  # either be refactored to non-nested transactions, or changed to
+  # tm().reTransact(), which explicitly allows nested transactions, but does not
+  # allow setting an isolation level override.
+  allowNestedTransactions: true
 
   # Make 'SERIALIZABLE' the default isolation level to ensure correctness.
   #
@@ -205,20 +192,18 @@ hibernate:
   # but lock tables explicitly, either using framework-dependent API, or execute
   # "select table for update" statements directly.
   connectionIsolation: TRANSACTION_SERIALIZABLE
-  # Whether to log all SQL queries to App Engine logs. Overridable at runtime.
+  # Whether to log all SQL queries. Overridable at runtime.
   logSqlQueries: false
 
   # Connection pool configurations.
   hikariConnectionTimeout: 20000
   # Cloud SQL connections are a relatively scarce resource (maximum is 1000 as
   # of March 2021). The minimumIdle should be a small value so that machines may
-  # release connections after a demand spike. The maximumPoolSize is set to 10
-  # because that is the maximum number of concurrent requests a Nomulus server
-  # instance can handle (as limited by AppEngine for basic/manual scaling). Note
-  # that BEAM pipelines are not subject to the maximumPoolSize value defined
-  # here. See PersistenceModule.java for more information.
+  # release connections after a demand spike. Note that BEAM pipelines are not
+  # subject to the maximumPoolSize value defined here. See PersistenceModule.java
+  # for more information.
   hikariMinimumIdle: 1
-  hikariMaximumPoolSize: 10
+  hikariMaximumPoolSize: 40
   hikariIdleTimeout: 300000
   # The batch size is basically the number of insertions / updates in a single
   # transaction that will be batched together into one INSERT/UPDATE statement.
@@ -230,7 +215,7 @@ hibernate:
   # The fetch size is the number of entities retrieved at a time from the
   # database cursor. Here we set a small default geared toward Nomulus server
   # transactions. Large queries can override the defaults on a per-query basis.
-  jdbcFetchSize: 20
+  jdbcFetchSize: 40
 
 cloudSql:
   # jdbc url for the Cloud SQL database.
@@ -268,8 +253,8 @@ caching:
 
   # Maximum total number of static premium list entry entities to cache in
   # memory, across all premium lists for all TLDs. Tuning this up will use more
-  # memory (and might require using larger App Engine instances). Note that
-  # premium list entries that are absent are cached in addition to ones that are
+  # memory (and might require using larger instances). Note that premium list
+  # entries that are absent are cached in addition to ones that are
   # present, so the total cache size is not bounded by the total number of
   # premium price entries that exist.
   staticPremiumListMaxCachedEntries: 200000
@@ -304,34 +289,16 @@ caching:
 # Note: Only allowedServiceAccountEmails and oauthClientId should be configured.
 # Other fields are related to OAuth-based authentication and will be removed.
 auth:
-  # Deprecated: Use OIDC-based auth instead. This field is for OAuth-based auth.
-  # OAuth scopes to detect on access tokens. Superset of requiredOauthScopes.
-  availableOauthScopes:
-  - https://www.googleapis.com/auth/userinfo.email
-
-  # Deprecated: Use OIDC-based auth instead. This field is for OAuth-based auth.
-  # OAuth scopes required for authenticating. Subset of availableOauthScopes.
-  requiredOauthScopes:
-  - https://www.googleapis.com/auth/userinfo.email
-
-  # Deprecated: Use OIDC-based auth instead. This field is for OAuth-based auth.
-  # OAuth client IDs that are allowed to authenticate and communicate with
-  # backend services, e.g. nomulus tool, EPP proxy, etc. The value in
-  # registryTool.clientId field should be included in this list. Client IDs are
-  # typically of the format
-  # numbers-alphanumerics.apps.googleusercontent.com
-  allowedOauthClientIds: []
-
-  # Service accounts (e.g. default service account, account used by Cloud
+  # Service accounts (e.g., default service account, account used by Cloud
   # Scheduler) allowed to send authenticated requests.
   allowedServiceAccountEmails:
   - default-service-account-email@email.com
   - cloud-scheduler-email@email.com
 
   # OAuth 2.0 client ID that will be used as the audience in OIDC ID tokens sent
-  # from clients (e.g. proxy, nomulus tool, cloud tasks) for authentication. The
+  # from clients (e.g., proxy, nomulus tool, cloud tasks) for authentication. The
   # same ID is the only one accepted by the regular OIDC or IAP authentication
-  # mechanisms. In most cases we should use the client ID created for IAP here,
+  # mechanisms. In most cases, we should use the client ID created for IAP here,
   # as it allows requests bearing a token with this audience to be accepted by
   # both IAP or regular OIDC. The clientId value in proxy config file should be
   # the same as this one.
@@ -355,6 +322,11 @@ credentialOAuth:
   delegatedCredentialOauthScopes:
   # View and manage groups on your domain in Directory API.
   - https://www.googleapis.com/auth/admin.directory.group
+  # View and manage users in Google Workspace
+  - https://www.googleapis.com/auth/admin.directory.user
+  # Security scope which seems to be required to create users via API,
+  # based on https://github.com/googleapis/google-api-nodejs-client/issues/1884
+  - https://www.googleapis.com/auth/admin.directory.user.security
   # View and manage group settings in Group Settings API.
   - https://www.googleapis.com/auth/apps.groups.settings
   # Send email through Gmail.
@@ -363,12 +335,8 @@ credentialOAuth:
   localCredentialOauthScopes:
   # View and manage data in all Google Cloud APIs.
   - https://www.googleapis.com/auth/cloud-platform
-  # Call App Engine APIs locally.
-  - https://www.googleapis.com/auth/appengine.apis
   # View your email address.
   - https://www.googleapis.com/auth/userinfo.email
-  # View and manage your applications deployed on Google App Engine
-  - https://www.googleapis.com/auth/appengine.admin
   # The lifetime of an access token generated by our custom credentials classes
   # Must be shorter than one hour.
   tokenRefreshDelaySeconds: 1800
@@ -382,7 +350,10 @@ icannReporting:
 
 billing:
   invoiceEmailRecipients: []
+  # Optional return address that overrides the default.
+  invoiceReplyToEmailAddress: null
   invoiceFilePrefix: REG-INV
+  billingInvoiceOriginUrl: https://billing-origin-url/
 
 rde:
   # URL prefix of ICANN's server to upload RDE reports to. Nomulus adds /TLD/ID
@@ -397,9 +368,8 @@ rde:
   sshIdentityEmailAddress: rde@example.com
 
 registrarConsole:
-  # Filename of the logo to use in the header of the console. This filename is
-  # relative to ui/assets/images/
-  logoFilename: logo.png
+  # DUM download file name, excluding the extension
+  dumFileName: dum_file_name
 
   # Contact phone number for support with the registry.
   supportPhoneNumber: +1 (888) 555 0123
@@ -407,19 +377,8 @@ registrarConsole:
   # Contact email address for support with the registry.
   supportEmailAddress: support@example.com
 
-  # From: email address used to send announcements from the registry.
-  announcementsEmailAddress: announcements@example.com
-
-  # Contact email address for questions about integrating with the registry.
-  integrationEmailAddress: integration@example.com
-
   # URL linking to directory of technical support docs on the registry.
   technicalDocsUrl: http://example.com/your_support_docs/
-
-  # Configuration for all analytics services installed in the web console
-  analyticsConfig:
-    # Google Analytics account where data on console use is sent, optional
-    googleAnalyticsId: null
 
 monitoring:
   # Max queries per second for the Google Cloud Monitoring V3 (aka Stackdriver)
@@ -441,6 +400,9 @@ misc:
   # Whether emails may be sent. For Prod and Sandbox this should be true.
   isEmailSendingEnabled: false
 
+  # Delay between bulk messages to avoid triggering Gmail fraud checks
+  emailThrottleSeconds: 30
+
   # Address we send alert summary emails to.
   alertRecipientEmailAddress: email@example.com
 
@@ -456,7 +418,7 @@ misc:
   spec11BccEmailAddresses:
     - abuse@example.com
 
-  # Number of times to retry a GAE operation when a transient exception is thrown.
+  # Number of times to retry an operation when a transient exception is thrown.
   # The number of milliseconds it'll sleep before giving up is (2^n - 2) * 100.
   transientFailureRetries: 12
 
@@ -478,22 +440,12 @@ beam:
   initialWorkerCount: 24
   stagingBucketUrl: gcs-bucket-with-staged-templates
 
-keyring:
-  # The name of the active keyring, either "Dummy" or "CSM". The latter stands
-  # for Cloud SecretManager.
-  activeKeyring: Dummy
-
 # Configuration options relevant to the "nomulus" registry tool.
 registryTool:
   # OAuth client ID used by the tool.
   clientId: YOUR_CLIENT_ID
   # OAuth client secret used by the tool.
   clientSecret: YOUR_CLIENT_SECRET
-
-# Configuration options for handling contact history.
-contactHistory:
-  # The number of months that a ContactHistory entity should be stored in the database.
-  minMonthsBeforeWipeOut: 18
 
 # Configuration options relevant to the DNS update functionality.
 dnsUpdate:
@@ -611,3 +563,79 @@ bulkPricingPackageMonitoring:
     Registrar: %3$s
     Active Domain Limit: %4$s
     Current Active Domains: %5$s
+
+# Configurations for integration with Brand Safety Alliance (BSA) API
+bsa:
+  # Algorithm for calculating block list checksums
+  bsaChecksumAlgorithm: SHA-256
+  # The time allotted to every BSA cron job.
+  bsaLockLeaseExpiryMinutes: 30
+  # Desired time between successive downloads.
+  bsaDownloadIntervalMinutes: 30
+  # Max time period during which downloads can be skipped because checksums have
+  # not changed from the previous one.
+  bsaMaxNopIntervalHours: 24
+  # A very lax upper bound of the lag between a domain-creating transaction's
+  # recorded and actual commit time. In Nomulus, a domain's creation time is the
+  # start time of the transaction, while the domain is only visible after the
+  # transaction commits. Let `l` represents this lag, then at any point of time
+  # `t`, a query of domains by creation time is only guaranteed to find those
+  # created before `t - l`. Please See `BsaRefreshAction` for use case.
+  #
+  # The value below is decided by finding the longest domain-creation EPP
+  # request over the past 3 months (60 seconds, which is much longer than the
+  # transaction time), and add to it the maximum allowed replication lag (30
+  # seconds).
+  domainCreateTxnCommitTimeLagSeconds: 90
+  # Number of entities (labels and unblockable domains) to process in a single
+  # DB transaction.
+  bsaTxnBatchSize: 1000
+  # Used by `BsaValidateAction`: ignore inconsistencies caused by recent events
+  # in the past. This is roughly equal to two `BsaRefreshAction` runs.
+  bsaValidationMaxStalenessSeconds: 3600
+
+  # Http endpoint for acquiring Auth tokens.
+  authUrl: "https://"
+  # Auth token expiry.
+  authTokenExpirySeconds: 1800
+  # Http endpoints for downloading data
+  dataUrls:
+    "BLOCK": "https://"
+    "BLOCK_PLUS": "https://"
+  # Http endpoint for reporting order processing status
+  orderStatusUrl: "https://"
+  # Http endpoint for reporting changes in the set of unblockable domains.
+  unblockableDomainsUrl: "https://"
+  # API endpoint for uploading the list of unavailable domain names.
+  uploadUnavailableDomainsUrl: "https://"
+
+mosapi:
+  # URL for the MosAPI
+  serviceUrl: https://mosapi.icann.org
+  # The type of entity being monitored.
+  # For registries, this is 'ry'
+  # For registrars, this is 'rr'
+  entityType: ry
+  # Add your List of TLDs to be monitored
+  tlds:
+  - your_tld1
+  - your_tld2
+  # Add tls cert secret name
+  # you configured in secret manager
+  tlsCertSecretName: YOUR_TLS_CERT_SECRET_NAME
+  # Add tls key secret name
+  # you configured in secret manager
+  tlsKeySecretName:  YOUR_TLS_KEY_SECRET_NAME
+  # List of services to check for each TLD.
+  services:
+  - "dns"
+  - "rdap"
+  - "rdds"
+  - "epp"
+  - "dnssec"
+
+  # Provides a fixed thread pool for parallel TLD processing.
+  # @see <a href="https://www.icann.org/mosapi-specification.pdf">
+  # ICANN MoSAPI Specification, Section 12.3</a>
+  tldThreadCount: 4
+

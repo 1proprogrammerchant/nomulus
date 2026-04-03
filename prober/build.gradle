@@ -32,12 +32,11 @@ dependencies {
   implementation deps['io.netty:netty-common']
   implementation deps['io.netty:netty-handler']
   implementation deps['io.netty:netty-transport']
-  implementation deps['javax.inject:javax.inject']
+  implementation deps['jakarta.inject:jakarta.inject-api']
   implementation deps['joda-time:joda-time']
-  implementation deps['org.bouncycastle:bcpkix-jdk15on']
-  implementation deps['org.bouncycastle:bcprov-jdk15on']
+  implementation deps['org.bouncycastle:bcpkix-jdk18on']
+  implementation deps['org.bouncycastle:bcprov-jdk18on']
   implementation deps['xerces:xmlParserAPIs']
-  implementation deps['xpp3:xpp3']
   implementation project(':common')
   implementation project(':util')
   implementation project(':networking')
@@ -48,7 +47,6 @@ dependencies {
 
   testImplementation deps['com.google.monitoring-client:contrib']
   testImplementation deps['com.google.truth:truth']
-  testImplementation deps['junit:junit']
   testImplementation deps['org.junit.jupiter:junit-jupiter-api']
   testImplementation deps['org.junit.jupiter:junit-jupiter-engine']
   testImplementation deps['org.junit.jupiter:junit-jupiter-params']
@@ -57,7 +55,7 @@ dependencies {
   testImplementation deps['org.mockito:mockito-core']
   testImplementation deps['org.testcontainers:junit-jupiter']
   testImplementation project(path: ':common', configuration: 'testing')
-  testImplementation project(path: ':networking', configuration: 'testRuntimeOnly')
+  testImplementation project(path: ':networking', configuration: 'testRuntimeElements')
 
   // Include auto-value in compile until nebula-lint understands
   // annotationProcessor

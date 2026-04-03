@@ -49,12 +49,12 @@ public class GoogleCredentialsBundle implements Serializable {
   }
 
   /**
-   * Returns the service account email address of the underlying {@link} GoogleCredentials, if
+   * Returns the service account email address of the underlying {@link GoogleCredentials}, if
    * possible.
    */
   public String serviceAccount() {
-    if (googleCredentials instanceof ServiceAccountSigner) {
-      return ((ServiceAccountSigner) googleCredentials).getAccount();
+    if (googleCredentials instanceof ServiceAccountSigner signer) {
+      return signer.getAccount();
     } else {
       throw new RuntimeException(
           String.format(

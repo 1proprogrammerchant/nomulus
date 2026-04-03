@@ -23,28 +23,26 @@ import google.registry.model.EppResource;
 import google.registry.model.ImmutableObject;
 import google.registry.model.UnsafeSerializable;
 import google.registry.model.annotations.IdAllocation;
-import google.registry.model.contact.ContactBase;
-import google.registry.model.contact.ContactHistory;
 import google.registry.model.domain.DomainBase;
 import google.registry.model.domain.DomainHistory;
 import google.registry.model.eppcommon.Trid;
 import google.registry.model.host.HostBase;
 import google.registry.model.host.HostHistory;
 import google.registry.model.reporting.HistoryEntry.HistoryEntryId;
+import google.registry.persistence.EntityCallbacksListener.RecursivePostLoad;
+import jakarta.persistence.Access;
+import jakarta.persistence.AccessType;
+import jakarta.persistence.AttributeOverride;
+import jakarta.persistence.AttributeOverrides;
+import jakarta.persistence.Column;
+import jakarta.persistence.Embeddable;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.Id;
+import jakarta.persistence.IdClass;
+import jakarta.persistence.MappedSuperclass;
 import java.util.Optional;
 import javax.annotation.Nullable;
-import javax.persistence.Access;
-import javax.persistence.AccessType;
-import javax.persistence.AttributeOverride;
-import javax.persistence.AttributeOverrides;
-import javax.persistence.Column;
-import javax.persistence.Embeddable;
-import javax.persistence.EnumType;
-import javax.persistence.Enumerated;
-import javax.persistence.Id;
-import javax.persistence.IdClass;
-import javax.persistence.MappedSuperclass;
-import javax.persistence.PostLoad;
 import org.apache.commons.lang3.BooleanUtils;
 import org.joda.time.DateTime;
 
@@ -120,8 +118,8 @@ public abstract class HistoryEntry extends ImmutableObject
    *
    * <p>Note that the embedded EPP resource is of a base type for which the repo ID field is
    * {@code @Transient}, which is NOT persisted as part of the embedded entity. After a {@link
-   * HistoryEntry} is loaded from SQL, the {@link #postLoad()} methods re-populates the field inside
-   * the EPP resource.
+   * HistoryEntry} is loaded from SQL, the {@link #historyEntryPostLoad()} methods re-populates the
+   * field inside the EPP resource.
    */
   @Id protected String repoId;
 
@@ -227,7 +225,8 @@ public abstract class HistoryEntry extends ImmutableObject
 
   public abstract Optional<? extends EppResource> getResourceAtPointInTime();
 
-  protected void processResourcePostLoad() {
+  @RecursivePostLoad
+  public void historyEntryPostLoad() {
     // Post-Registry 3.0 entity should always have the resource field, whereas pre-Registry 3.0
     // will return a null resource.
     if (getResource() != null && getResource().getRepoId() == null) {
@@ -235,11 +234,6 @@ public abstract class HistoryEntry extends ImmutableObject
       // from SQL.
       getResource().setRepoId(repoId);
     }
-  }
-
-  @PostLoad
-  protected void postLoad() {
-    processResourcePostLoad();
   }
 
   @Override
@@ -348,8 +342,6 @@ public abstract class HistoryEntry extends ImmutableObject
       HistoryEntry.Builder<? extends HistoryEntry, ?> createBuilderForResource(E parent) {
     if (parent instanceof DomainBase) {
       return new DomainHistory.Builder().setDomain((DomainBase) parent);
-    } else if (parent instanceof ContactBase) {
-      return new ContactHistory.Builder().setContact((ContactBase) parent);
     } else if (parent instanceof HostBase) {
       return new HostHistory.Builder().setHost((HostBase) parent);
     } else {

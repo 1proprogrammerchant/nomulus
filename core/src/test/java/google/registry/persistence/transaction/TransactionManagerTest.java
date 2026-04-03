@@ -22,19 +22,17 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Maps;
-import com.google.common.truth.Truth8;
 import google.registry.model.ImmutableObject;
 import google.registry.persistence.VKey;
 import google.registry.persistence.transaction.JpaTestExtensions.JpaUnitTestExtension;
 import google.registry.testing.FakeClock;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Id;
+import jakarta.persistence.MappedSuperclass;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Set;
 import java.util.stream.Stream;
-import javax.persistence.Embeddable;
-import javax.persistence.Entity;
-import javax.persistence.Id;
-import javax.persistence.MappedSuperclass;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -328,11 +326,10 @@ public class TransactionManagerTest {
   @Test
   void loadSingleton_returnsValue_orEmpty() {
     assertEntityNotExist(theEntity);
-    Truth8.assertThat(tm().transact(() -> tm().loadSingleton(TestEntity.class))).isEmpty();
+    assertThat(tm().transact(() -> tm().loadSingleton(TestEntity.class))).isEmpty();
 
     tm().transact(() -> tm().insert(theEntity));
-    Truth8.assertThat(tm().transact(() -> tm().loadSingleton(TestEntity.class)))
-        .hasValue(theEntity);
+    assertThat(tm().transact(() -> tm().loadSingleton(TestEntity.class))).hasValue(theEntity);
   }
 
   @Test
@@ -378,7 +375,6 @@ public class TransactionManagerTest {
    * We put the id field into a base class to test that id fields can be discovered in a base class.
    */
   @MappedSuperclass
-  @Embeddable
   private static class TestEntityBase extends ImmutableObject {
     @Id protected String name;
 

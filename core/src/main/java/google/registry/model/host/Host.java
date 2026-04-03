@@ -18,12 +18,12 @@ import google.registry.model.EppResource.ForeignKeyedEppResource;
 import google.registry.model.annotations.ExternalMessagingName;
 import google.registry.persistence.VKey;
 import google.registry.persistence.WithVKey;
-import javax.persistence.Access;
-import javax.persistence.AccessType;
-import javax.persistence.Entity;
-import javax.persistence.Id;
-import javax.persistence.Index;
-import javax.persistence.Table;
+import jakarta.persistence.Access;
+import jakarta.persistence.AccessType;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Id;
+import jakarta.persistence.Index;
+import jakarta.persistence.Table;
 
 /**
  * A persistable Host resource including mutable and non-mutable fields.
@@ -49,6 +49,7 @@ import javax.persistence.Table;
       @Index(columnList = "creationTime"),
       @Index(columnList = "deletionTime"),
       @Index(columnList = "currentSponsorRegistrarId"),
+      @Index(columnList = "superordinateDomain")
     })
 @ExternalMessagingName("host")
 @WithVKey(String.class)
@@ -78,22 +79,6 @@ public class Host extends HostBase implements ForeignKeyedEppResource {
 
     private Builder(Host instance) {
       super(instance);
-    }
-
-    public Builder copyFrom(HostBase hostBase) {
-      return setCreationRegistrarId(hostBase.getCreationRegistrarId())
-          .setCreationTime(hostBase.getCreationTime())
-          .setDeletionTime(hostBase.getDeletionTime())
-          .setHostName(hostBase.getHostName())
-          .setInetAddresses(hostBase.getInetAddresses())
-          .setLastTransferTime(hostBase.getLastTransferTime())
-          .setLastSuperordinateChange(hostBase.getLastSuperordinateChange())
-          .setLastEppUpdateRegistrarId(hostBase.getLastEppUpdateRegistrarId())
-          .setLastEppUpdateTime(hostBase.getLastEppUpdateTime())
-          .setPersistedCurrentSponsorRegistrarId(hostBase.getPersistedCurrentSponsorRegistrarId())
-          .setRepoId(hostBase.getRepoId())
-          .setSuperordinateDomain(hostBase.getSuperordinateDomain())
-          .setStatusValues(hostBase.getStatusValues());
     }
   }
 }

@@ -14,7 +14,6 @@
 
 package google.registry.tools;
 
-import static google.registry.model.EppResourceUtils.loadByForeignKey;
 import static google.registry.testing.DatabaseHelper.assertBillingEventsForResource;
 import static google.registry.testing.DatabaseHelper.createTlds;
 import static google.registry.testing.DatabaseHelper.getOnlyHistoryEntryOfType;
@@ -23,6 +22,7 @@ import static google.registry.util.DateTimeUtils.END_OF_TIME;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import google.registry.flows.EppTestCase;
+import google.registry.model.ForeignKeyUtils;
 import google.registry.model.billing.BillingBase.Reason;
 import google.registry.model.billing.BillingEvent;
 import google.registry.model.domain.Domain;
@@ -59,7 +59,6 @@ class EppLifecycleToolsTest extends EppTestCase {
   @Test
   void test_renewDomainThenUnrenew() throws Exception {
     assertThatLoginSucceeds("NewRegistrar", "foo-BAR2");
-    createContacts(DateTime.parse("2000-06-01T00:00:00Z"));
 
     // Create the domain for 2 years.
     assertThatCommand(
@@ -116,7 +115,7 @@ class EppLifecycleToolsTest extends EppTestCase {
         .atTime("2001-06-08T00:00:00Z")
         .hasResponse("poll_response_unrenew.xml");
 
-    assertThatCommand("poll_ack.xml", ImmutableMap.of("ID", "21-2001"))
+    assertThatCommand("poll_ack.xml", ImmutableMap.of("ID", "17-2001"))
         .atTime("2001-06-08T00:00:01Z")
         .hasResponse("poll_ack_response_empty.xml");
 
@@ -137,7 +136,7 @@ class EppLifecycleToolsTest extends EppTestCase {
         .hasResponse(
             "poll_response_autorenew.xml",
             ImmutableMap.of(
-                "ID", "23-2003",
+                "ID", "19-2003",
                 "QDATE", "2003-06-01T00:02:00Z",
                 "DOMAIN", "example.tld",
                 "EXDATE", "2004-06-01T00:02:00Z"));
@@ -145,7 +144,9 @@ class EppLifecycleToolsTest extends EppTestCase {
     // Assert about billing events.
     DateTime createTime = DateTime.parse("2000-06-01T00:02:00Z");
     Domain domain =
-        loadByForeignKey(Domain.class, "example.tld", DateTime.parse("2003-06-02T00:02:00Z")).get();
+        ForeignKeyUtils.loadResource(
+                Domain.class, "example.tld", DateTime.parse("2003-06-02T00:02:00Z"))
+            .get();
     BillingEvent renewBillingEvent =
         new BillingEvent.Builder()
             .setReason(Reason.RENEW)
